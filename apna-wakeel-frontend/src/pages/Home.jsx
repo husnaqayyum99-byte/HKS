@@ -21,7 +21,7 @@ const outcomes = [
   { icon: "check", key: "results.actionPlan" },
 ];
 
-export default function Home({ onStart }) {
+export default function Home({ onStart, onAnalyze }) {
   const { t } = useLanguage();
 
   return (
@@ -45,6 +45,9 @@ export default function Home({ onStart }) {
             <div className="btn-row">
               <Button variant="accent" size="lg" iconAfter="arrow" onClick={onStart}>
                 {t("nav.startNow")}
+              </Button>
+              <Button variant="ondark" size="lg" iconAfter="arrow" onClick={onAnalyze}>
+                {t("home.tryAnalysis")}
               </Button>
               <Button variant="ondark" size="lg" href="#how-it-works">
                 {t("hero.seeHow")}

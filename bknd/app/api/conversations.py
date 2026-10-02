@@ -36,6 +36,8 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         "underReview": " [Under Review]",
         "underReviewNotice": "The Pakistan Code marks at least one consolidated text as under review; check the relevant Gazette notification for later amendments.",
         "needDescription": "Please briefly describe what happened and where. Share what outcome you need; you can leave out details you do not know.",
+        "clarificationPrompt": "To understand your situation, please clarify:",
+        "limitedNextStep": "Keep relevant messages, documents, photos, and dates together.",
         "responseUnavailable": "I could not prepare a response from the available information. Please try again.",
     }
     message_labels.update({key: value for key, value in (labels or {}).items() if isinstance(value, str)})
@@ -43,12 +45,37 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
     if pipeline_result.get("status") == "needs_description":
         return message_labels["needDescription"]
 
+    if pipeline_result.get("status") == "needs_clarification":
+        intake = pipeline_result.get("intake", {})
+        sections = []
+        if intake.get("problem_summary"):
+            sections.append(f"{message_labels['caseSummary']}:\n{intake['problem_summary']}")
+        questions = (pipeline_result.get("follow_up", {}).get("questions") or [])[:3]
+        if questions:
+            formatted_questions = "\n".join(
+                f"{index}. {question}"
+                for index, question in enumerate(questions, 1)
+            )
+            sections.append(f"{message_labels['clarificationPrompt']}\n{formatted_questions}")
+        return "\n\n".join(sections) or message_labels["responseUnavailable"]
+
     if pipeline_result.get("status") == "evidence_unavailable":
         intake = pipeline_result.get("intake", {})
         sections = []
         if intake.get("problem_summary"):
             sections.append(f"{message_labels['caseSummary']}:\n{intake['problem_summary']}")
-        sections.extend((message_labels["noOfficialEvidence"], message_labels["legalDisclaimer"]))
+        sections.extend((
+            message_labels["noOfficialEvidence"],
+            f"{message_labels['nextSteps']}:\n1. {message_labels['limitedNextStep']}",
+        ))
+        questions = (pipeline_result.get("follow_up", {}).get("questions") or [])[:3]
+        if questions:
+            formatted_questions = "\n".join(
+                f"{index}. {question}"
+                for index, question in enumerate(questions, 1)
+            )
+            sections.append(f"{message_labels['optionalDetails']}:\n{formatted_questions}")
+        sections.append(message_labels["legalDisclaimer"])
         return "\n\n".join(sections)
 
     intake = pipeline_result.get("intake", {})

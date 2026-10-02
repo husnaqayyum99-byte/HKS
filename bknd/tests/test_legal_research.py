@@ -2,10 +2,11 @@ import json
 from unittest.mock import Mock
 from unittest.mock import patch
 
-from app.agents import followup_agent, intake_agent, orchestrator, response_agent
+from app.agents import followup_agent, intake_agent, orchestrator, research_agent, response_agent
 from app.agents.orchestrator import process_case
 from app.api.conversations import format_case_response
-from app.legal_sources.source_registry import get_relevant_sources
+from app.legal_sources.source_registry import LegalSource, get_relevant_sources
+from app.legal_sources import evidence_retriever
 from app.legal_sources.statute_retriever import (
     LawRecord,
     _record_matches,
@@ -13,6 +14,7 @@ from app.legal_sources.statute_retriever import (
 )
 from app.agents.verification_agent import verify_claim
 from app.legal_sources.evidence import EvidenceItem
+from app.agents.research_agent import EvidenceGapPlan
 from app.api.legal import normalize_analysis
 
 
@@ -55,6 +57,25 @@ def test_statute_matching_respects_jurisdiction_and_act_title():
         "pakistancode.gov.pk",
     )
     assert not _record_matches(old_motor_vehicles_act, "Motor Vehicles Act, 1999")
+
+
+def test_official_source_link_discovery_accepts_registered_subdomains(monkeypatch):
+    source = LegalSource(
+        name="NADRA",
+        authority="National Database and Registration Authority",
+        jurisdiction="Pakistan",
+        source_type="government_authority",
+        domain="Identity documents and registration services",
+        official_domain="nadra.gov.pk",
+    )
+    response = Mock()
+    response.text = '<a href="https://www.nadra.gov.pk/lost-cnic-replacement">Lost CNIC replacement procedure</a><a href="https://fake-nadra.gov.pk/lost-cnic">Other</a>'
+    response.url = "https://www.nadra.gov.pk/"
+    monkeypatch.setattr(evidence_retriever.requests, "get", lambda *_args, **_kwargs: response)
+
+    links = evidence_retriever.find_relevant_links(source, "lost CNIC replacement procedure")
+
+    assert links == ["https://www.nadra.gov.pk/lost-cnic-replacement"]
 
 
 def test_verifier_citations_are_mapped_to_retrieved_sources():
@@ -155,6 +176,32 @@ def test_chat_response_uses_localized_labels():
     assert format_case_response({"status": "needs_description"}, labels) == "Mukhtasaran batayein kya hua."
 
 
+def test_chat_clarification_response_shows_questions_without_guidance():
+    text = format_case_response({
+        "status": "needs_clarification",
+        "intake": {"problem_summary": "An employment concern."},
+        "follow_up": {"questions": ["When were the wages due?"]},
+        "response": {},
+    })
+
+    assert "When were the wages due?" in text
+    assert "Case summary:" in text
+    assert "What we can tell you now" not in text
+
+
+def test_evidence_unavailable_chat_preserves_questions_and_safe_step():
+    text = format_case_response({
+        "status": "evidence_unavailable",
+        "intake": {"problem_summary": "An employment concern."},
+        "follow_up": {"questions": ["Which city did this happen in?"]},
+        "evidence": [],
+    })
+
+    assert "Which city did this happen in?" in text
+    assert "Keep relevant messages, documents, photos, and dates together." in text
+    assert "No official source evidence was retrieved" in text
+
+
 def test_roman_urdu_analysis_fallback_uses_roman_urdu_time_units():
     result = normalize_analysis({}, "A property issue", "Punjab", "roman_urdu")
 
@@ -216,6 +263,41 @@ def test_final_response_prompt_connects_user_facts_to_retrieved_law(monkeypatch)
     assert "Begin the answer by briefly restating the user's situation" in prompts[0]
     assert "connect its verified rule to the stated facts" in prompts[0]
     assert "say what is uncertain and what information is needed" in prompts[0]
+    assert "A source's silence does not establish that a requirement is absent" in prompts[0]
+    assert "Never state that a procedure is not required" in prompts[0]
+    assert "evidence affirmatively establishes that conclusion" in prompts[0]
+
+
+def test_gap_agent_targets_unanswered_parts_and_rejects_silence_inference(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(
+        "app.agents.research_agent.generate_response",
+        lambda prompt: prompts.append(prompt) or json.dumps({
+            "research_questions": ["What official documents are required for replacement?"],
+            "laws_to_check": [],
+        }),
+    )
+    evidence = [EvidenceItem(
+        source_name="Pakistan Code",
+        source_url="https://pakistancode.gov.pk/ordinance.pdf",
+        source_title="NADRA Ordinance",
+        jurisdiction="Federal",
+        source_type="legislation",
+        relevant_text="Report the loss to a Registration Officer.",
+        citation="NADRA Ordinance, section 30",
+    )]
+
+    result = research_agent.identify_evidence_gaps(
+        user_message="Do I need an FIR and what documents do I need?",
+        intake_data={},
+        classification_data={},
+        research_plan={"research_questions": ["What happens after loss?"], "laws_to_check": []},
+        evidence=evidence,
+    )
+
+    assert result.research_questions == ["What official documents are required for replacement?"]
+    assert "A source's silence is not evidence" in prompts[0]
+    assert "Report the loss to a Registration Officer." in prompts[0]
 
 
 def test_greeting_gets_short_case_description_prompt():
@@ -223,47 +305,250 @@ def test_greeting_gets_short_case_description_prompt():
     assert "describe what happened" in format_case_response({"status": "needs_description"})
 
 
-def test_criminal_pipeline_adds_federal_and_kp_law_candidates(monkeypatch):
-    intake = Model({"problem_summary": "A motorcycle theft.", "facts": []})
-    intake.problem_summary = "A motorcycle theft."
-    intake.category = "property"
+def test_pipeline_returns_clarification_before_research(monkeypatch):
+    intake = Model({"problem_summary": "A contract was signed.", "facts": []})
+    classification = Model({
+        "legal_domain": "civil",
+        "matter_type": "contract",
+        "jurisdiction": "Pakistan",
+        "locality": "unknown",
+    })
+    follow_up = Model({
+        "needs_follow_up": True,
+        "questions": ["What outcome are you seeking?"],
+        "reason": "The requested outcome is unknown.",
+    })
+    research = Mock(side_effect=AssertionError("research should wait for clarification"))
+    evidence = Mock(side_effect=AssertionError("evidence retrieval should wait for clarification"))
+
+    monkeypatch.setattr(orchestrator, "intake_case", lambda *_args, **_kwargs: intake)
+    monkeypatch.setattr(orchestrator, "classify_case", lambda *_args: classification)
+    monkeypatch.setattr(orchestrator, "generate_follow_up_questions", lambda **_kwargs: follow_up)
+    monkeypatch.setattr(orchestrator, "create_research_plan", research)
+    monkeypatch.setattr(orchestrator, "collect_evidence", evidence)
+
+    result = process_case("I signed a contract.")
+
+    assert result["status"] == "needs_clarification"
+    assert result["follow_up"]["questions"] == ["What outcome are you seeking?"]
+    research.assert_not_called()
+    evidence.assert_not_called()
+
+
+def test_pipeline_uses_research_plan_laws_for_any_domain(monkeypatch):
+    intake = Model({"problem_summary": "My employer withheld wages.", "facts": []})
+    intake.problem_summary = "My employer withheld wages."
+    intake.category = "employment"
     intake.facts = []
     classification = Model({
-        "legal_domain": "property",
-        "matter_type": "theft",
-        "jurisdiction": "Khyber Pakhtunkhwa",
-        "locality": "Chitral",
+        "legal_domain": "employment",
+        "matter_type": "unpaid wages",
+        "jurisdiction": "Punjab",
+        "locality": "Lahore",
     })
-    classification.legal_domain = "property"
-    classification.matter_type = "theft"
-    classification.jurisdiction = "Khyber Pakhtunkhwa"
-    classification.locality = "Chitral"
+    classification.legal_domain = "employment"
+    classification.matter_type = "unpaid wages"
+    classification.jurisdiction = "Punjab"
+    classification.locality = "Lahore"
     follow_up = Model({"needs_follow_up": False, "questions": [], "reason": ""})
     research = Model({
-        "research_questions": ["theft law"],
+        "research_questions": ["Minimum wage and wage recovery procedure"],
         "evidence_needed": [],
-        "laws_to_check": [],
+        "laws_to_check": ["Punjab Payment of Wages Act"],
     })
     research.research_questions = research.data["research_questions"]
     research.evidence_needed = research.data["evidence_needed"]
     research.laws_to_check = research.data["laws_to_check"]
     final = Model({"answer": "Sourced answer."})
     statute_lookup = Mock(return_value=[])
+    evidence_lookup = Mock(return_value=[])
 
     monkeypatch.setattr(orchestrator, "intake_case", lambda _, **__: intake)
     monkeypatch.setattr(orchestrator, "classify_case", lambda _: classification)
     monkeypatch.setattr(orchestrator, "generate_follow_up_questions", lambda **_: follow_up)
     monkeypatch.setattr(orchestrator, "create_research_plan", lambda *_: research)
+    monkeypatch.setattr(orchestrator, "identify_evidence_gaps", lambda *_args, **_kwargs: EvidenceGapPlan())
     monkeypatch.setattr(orchestrator, "get_relevant_sources", lambda *_: [])
-    monkeypatch.setattr(orchestrator, "collect_evidence", lambda *_: [])
+    monkeypatch.setattr(orchestrator, "collect_evidence", evidence_lookup)
     monkeypatch.setattr(orchestrator, "collect_statute_evidence", statute_lookup)
     monkeypatch.setattr(orchestrator, "verify_claim", lambda claim, _: Model({"claim": claim}))
     monkeypatch.setattr(orchestrator, "generate_final_response", lambda **_: final)
 
-    result = process_case("A motorcycle was stolen in Chitral.")
-    law_names = statute_lookup.call_args.args[0]
+    result = process_case("My employer withheld wages.")
 
     assert result["status"] == "evidence_unavailable"
-    assert "Pakistan Penal Code, 1860" in law_names
-    assert "Code of Criminal Procedure, 1898" in law_names
-    assert "Khyber Pakhtunkhwa Police Act" in law_names
+    assert statute_lookup.call_args.args[0] == ["Punjab Payment of Wages Act"]
+    assert statute_lookup.call_args.args[1] == ["Minimum wage and wage recovery procedure"]
+    evidence_lookup.assert_called_once()
+
+
+def test_pipeline_retrieves_evidence_for_gaps_before_final_response(monkeypatch):
+    intake = Model({"problem_summary": "A lost CNIC replacement.", "facts": []})
+    classification = Model({
+        "legal_domain": "identity documents",
+        "matter_type": "lost CNIC",
+        "jurisdiction": "Pakistan",
+        "locality": "Chitral",
+    })
+    classification.legal_domain = "identity documents"
+    classification.jurisdiction = "Pakistan"
+    classification.locality = "Chitral"
+    follow_up = Model({"needs_follow_up": False, "questions": [], "reason": ""})
+    research = Model({
+        "research_questions": ["What must a person do after losing a CNIC?"],
+        "evidence_needed": [],
+        "laws_to_check": ["National Database and Registration Authority Ordinance, 2000"],
+    })
+    research.research_questions = research.data["research_questions"]
+    research.laws_to_check = research.data["laws_to_check"]
+    gap_plan = Model({
+        "research_questions": [
+            "Is a police report or FIR required to replace a lost CNIC?",
+            "What official documents and procedure are required to replace a lost CNIC?",
+        ],
+        "laws_to_check": [],
+    })
+    gap_plan.research_questions = gap_plan.data["research_questions"]
+    gap_plan.laws_to_check = gap_plan.data["laws_to_check"]
+    official_source = LegalSource(
+        name="NADRA",
+        authority="National Database and Registration Authority",
+        jurisdiction="Pakistan",
+        source_type="government_authority",
+        domain="Identity documents and registration services",
+        official_domain="nadra.gov.pk",
+    )
+    initial_evidence = EvidenceItem(
+        source_name="Pakistan Code",
+        source_url="https://pakistancode.gov.pk/ordinance.pdf",
+        source_title="NADRA Ordinance, 2000",
+        jurisdiction="Federal",
+        source_type="legislation",
+        relevant_text="A person must report the loss to a Registration Officer.",
+        citation="NADRA Ordinance, 2000, section 30",
+    )
+    supplemental_evidence = EvidenceItem(
+        source_name="NADRA",
+        source_url="https://www.nadra.gov.pk/lost-id-card",
+        source_title="Lost identity card procedure",
+        jurisdiction="Pakistan",
+        source_type="government_authority",
+        relevant_text="Official replacement procedure and required documents.",
+    )
+    retrieval_queries = []
+    response_evidence = []
+
+    def collect_general_evidence(_sources, questions):
+        retrieval_queries.append(list(questions))
+        if len(retrieval_queries) == 1:
+            return [initial_evidence]
+        return [supplemental_evidence]
+
+    monkeypatch.setattr(orchestrator, "intake_case", lambda *_args, **_kwargs: intake)
+    monkeypatch.setattr(orchestrator, "classify_case", lambda *_args: classification)
+    monkeypatch.setattr(orchestrator, "generate_follow_up_questions", lambda **_kwargs: follow_up)
+    monkeypatch.setattr(orchestrator, "create_research_plan", lambda *_args: research)
+    monkeypatch.setattr(orchestrator, "identify_evidence_gaps", lambda *_args, **_kwargs: gap_plan, raising=False)
+    monkeypatch.setattr(orchestrator, "get_relevant_sources", lambda *_args: [official_source])
+    monkeypatch.setattr(orchestrator, "collect_evidence", collect_general_evidence)
+    monkeypatch.setattr(orchestrator, "collect_statute_evidence", lambda *_args: [])
+    monkeypatch.setattr(
+        orchestrator,
+        "verify_claim",
+        lambda claim, available: Model({"claim": claim, "evidence_used": [item.model_dump() for item in available]}),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "generate_final_response",
+        lambda **kwargs: response_evidence.extend(kwargs["evidence"]) or Model({"answer": "Evidence reviewed."}),
+    )
+
+    result = process_case("I lost my CNIC yesterday. Do I need an FIR and what documents do I need?")
+
+    assert len(retrieval_queries) == 2
+    assert retrieval_queries[1] == gap_plan.research_questions
+    assert result["status"] == "completed"
+    assert supplemental_evidence in [item for item in response_evidence]
+    assert len(response_evidence) == 2
+
+
+def test_pipeline_continues_after_user_answers_clarification(monkeypatch):
+    intake = Model({"problem_summary": "An employment concern.", "facts": []})
+    classification = Model({
+        "legal_domain": "employment",
+        "matter_type": "unpaid wages",
+        "jurisdiction": "Punjab",
+        "locality": "Lahore",
+    })
+    classification.legal_domain = "employment"
+    classification.jurisdiction = "Punjab"
+    classification.locality = "Lahore"
+    follow_up = Model({"needs_follow_up": False, "questions": [], "reason": ""})
+    research = Model({"research_questions": ["Wage recovery process"], "evidence_needed": [], "laws_to_check": []})
+    research.research_questions = research.data["research_questions"]
+    research.laws_to_check = research.data["laws_to_check"]
+    research_call = Mock(return_value=research)
+
+    monkeypatch.setattr(orchestrator, "intake_case", lambda *_args, **_kwargs: intake)
+    monkeypatch.setattr(orchestrator, "classify_case", lambda *_args: classification)
+    monkeypatch.setattr(orchestrator, "generate_follow_up_questions", lambda **_kwargs: follow_up)
+    monkeypatch.setattr(orchestrator, "create_research_plan", research_call)
+    monkeypatch.setattr(orchestrator, "identify_evidence_gaps", lambda *_args, **_kwargs: EvidenceGapPlan())
+    monkeypatch.setattr(orchestrator, "get_relevant_sources", lambda *_args: [])
+    monkeypatch.setattr(orchestrator, "collect_evidence", lambda *_args: [])
+    monkeypatch.setattr(orchestrator, "collect_statute_evidence", lambda *_args: [])
+
+    result = process_case(
+        "The wages were due last week.",
+        conversation_history=[
+            {"role": "assistant", "content": "When were the wages due?"},
+            {"role": "user", "content": "The wages were due last week."},
+        ],
+    )
+
+    assert result["status"] == "evidence_unavailable"
+    research_call.assert_called_once()
+
+
+def test_pipeline_completes_when_evidence_is_available(monkeypatch):
+    intake = Model({"problem_summary": "A tenant received a written notice.", "facts": []})
+    classification = Model({
+        "legal_domain": "housing",
+        "matter_type": "tenancy",
+        "jurisdiction": "Pakistan",
+        "locality": "unknown",
+    })
+    classification.legal_domain = "housing"
+    classification.jurisdiction = "Pakistan"
+    classification.locality = "unknown"
+    follow_up = Model({"needs_follow_up": False, "questions": [], "reason": ""})
+    research = Model({"research_questions": ["What does the official tenancy law say about notice?"], "evidence_needed": [], "laws_to_check": []})
+    research.research_questions = research.data["research_questions"]
+    research.laws_to_check = research.data["laws_to_check"]
+    evidence_item = EvidenceItem(
+        source_name="Pakistan Code",
+        source_url="https://pakistancode.gov.pk/tenancy.pdf",
+        source_title="Tenancy law",
+        jurisdiction="Federal",
+        source_type="legislation",
+        relevant_text="Official tenancy provision.",
+        citation="Tenancy law",
+    )
+    final = Model({"answer": "The retrieved source addresses notice requirements."})
+
+    monkeypatch.setattr(orchestrator, "intake_case", lambda *_args, **_kwargs: intake)
+    monkeypatch.setattr(orchestrator, "classify_case", lambda *_args: classification)
+    monkeypatch.setattr(orchestrator, "generate_follow_up_questions", lambda **_kwargs: follow_up)
+    monkeypatch.setattr(orchestrator, "create_research_plan", lambda *_args: research)
+    monkeypatch.setattr(orchestrator, "identify_evidence_gaps", lambda *_args, **_kwargs: EvidenceGapPlan())
+    monkeypatch.setattr(orchestrator, "get_relevant_sources", lambda *_args: [])
+    monkeypatch.setattr(orchestrator, "collect_evidence", lambda *_args: [evidence_item])
+    monkeypatch.setattr(orchestrator, "collect_statute_evidence", lambda *_args: [])
+    monkeypatch.setattr(orchestrator, "verify_claim", lambda claim, _evidence: Model({"claim": claim}))
+    monkeypatch.setattr(orchestrator, "generate_final_response", lambda **_kwargs: final)
+
+    result = process_case("A tenant received a written notice.")
+
+    assert result["status"] == "completed"
+    assert result["response"]["answer"] == "The retrieved source addresses notice requirements."
+    assert result["evidence"][0]["citation"] == "Tenancy law"

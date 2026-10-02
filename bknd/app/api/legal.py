@@ -356,6 +356,36 @@ async def analyze_problem(data: AnalyzeRequest):
         logger.error("Legal analysis failed: type=%s", type(error).__name__)
         raise HTTPException(status_code=503, detail="legal.aiUnavailable") from None
 
+    if pipeline.get("status") == "needs_clarification":
+        intake = pipeline.get("intake") or {}
+        classification = pipeline.get("classification") or {}
+        follow_up = pipeline.get("follow_up") or {}
+        return {
+            "isDemo": False,
+            "status": "needs_clarification",
+            "follow_up_questions": (follow_up.get("questions") or [])[:3],
+            "legalArea": {
+                "name": classification.get("legal_domain") or "Unclear",
+                "tag": classification.get("matter_type") or "Unclear",
+            },
+            "explanation": [],
+            "relevantInfo": [],
+            "authority": None,
+            "timeline": [],
+            "documents": [],
+            "evidence": [],
+            "actionPlan": [],
+            "sources": [],
+            "sourceStatus": "none",
+            "intake": {
+                "problem_summary": intake.get("problem_summary") or problem[:160],
+            },
+            "classification": {
+                "jurisdiction": classification.get("jurisdiction") or province or "Pakistan",
+                "locality": classification.get("locality") or province or "unknown",
+            },
+        }
+
     intake = pipeline.get("intake") or {}
     classification = pipeline.get("classification") or {}
     response = pipeline.get("response") or {}
@@ -398,6 +428,8 @@ async def analyze_problem(data: AnalyzeRequest):
         }
     return {
         "isDemo": False,
+        "status": "completed" if sources else "evidence_unavailable",
+        "follow_up_questions": (pipeline.get("follow_up", {}).get("questions") or [])[:3],
         "legalArea": {
             "name": classification.get("legal_domain") or "Unclear",
             "tag": classification.get("matter_type") or "Unclear",

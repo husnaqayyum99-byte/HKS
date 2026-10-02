@@ -562,6 +562,8 @@ export default function Dashboard({ pathname, navigate, user, accessToken, onLog
           nextSteps: t("chat.nextSteps"),
           documentsNeeded: t("chat.documentsNeeded"),
           optionalDetails: t("chat.optionalDetails"),
+          clarificationPrompt: t("chat.clarificationPrompt"),
+          limitedNextStep: t("chat.limitedNextStep"),
           officialReferences: t("chat.officialReferences"),
           aiGenerated: t("chat.aiGenerated"),
           sourceVerified: t("chat.sourceVerified"),

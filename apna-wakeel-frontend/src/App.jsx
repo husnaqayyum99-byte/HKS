@@ -6,6 +6,7 @@ import Login from "./pages/Login.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import PublicAnalysis from "./pages/PublicAnalysis.jsx";
 import Alert from "./components/Alert.jsx";
 import { useLanguage } from "./i18n/LanguageContext.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
@@ -31,7 +32,7 @@ export default function App() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (user && !pathname.startsWith("/app") && !["/forgot-password", "/reset-password"].includes(pathname)) navigate("/app", true);
+    if (user && !pathname.startsWith("/app") && !["/forgot-password", "/reset-password", "/analysis"].includes(pathname)) navigate("/app", true);
     if (!user && pathname.startsWith("/app")) navigate("/login", true);
   }, [authLoading, user, pathname]);
 
@@ -112,8 +113,9 @@ export default function App() {
             {pathname === "/reset-password" && (
               <ResetPassword onComplete={() => navigate("/login", true)} onBack={() => navigate("/login")} />
             )}
-            {!onAuthPage && (
-              <Home onStart={() => navigate("/signup")} />
+            {pathname === "/analysis" && <PublicAnalysis />}
+            {!onAuthPage && pathname !== "/analysis" && (
+              <Home onStart={() => navigate("/signup")} onAnalyze={() => navigate("/analysis")} />
             )}
           </div>
         )}

@@ -12,6 +12,7 @@ def test_public_analysis_limits_result_when_no_official_evidence(monkeypatch):
         "classification": {"legal_domain": "civil", "matter_type": "contract", "jurisdiction": "Pakistan", "locality": "unknown"},
         "response": {"answer": "Unsupported generated legal claim", "authorities": ["Made-up court"]},
         "evidence": [],
+        "follow_up": {"questions": ["Which district is this in?"]},
     })
 
     result = asyncio.run(legal.analyze_problem(legal.AnalyzeRequest(problem="A contract dispute")))
@@ -19,8 +20,29 @@ def test_public_analysis_limits_result_when_no_official_evidence(monkeypatch):
     assert result["sourceStatus"] == "none"
     assert result["sources"] == []
     assert result["authority"] is None
+    assert result["status"] == "evidence_unavailable"
+    assert result["follow_up_questions"] == ["Which district is this in?"]
     assert "Official legal-source evidence could not be retrieved" in result["explanation"][0]
     assert "Unsupported generated legal claim" not in result["explanation"][0]
+
+
+def test_public_analysis_returns_clarification_without_fallback_guidance(monkeypatch):
+    monkeypatch.setattr(legal, "process_case", lambda *args, **kwargs: {
+        "status": "needs_clarification",
+        "intake": {"problem_summary": "An employment concern."},
+        "classification": {"legal_domain": "employment", "matter_type": "unpaid wages", "jurisdiction": "Punjab", "locality": "Lahore"},
+        "follow_up": {"questions": ["When were the wages due?"]},
+        "response": {},
+        "evidence": [],
+    })
+
+    result = asyncio.run(legal.analyze_problem(legal.AnalyzeRequest(problem="My employer withheld wages.")))
+
+    assert result["status"] == "needs_clarification"
+    assert result["follow_up_questions"] == ["When were the wages due?"]
+    assert result["authority"] is None
+    assert result["timeline"] == []
+    assert result["explanation"] == []
 
 
 def test_public_analysis_only_returns_official_retrieved_sources(monkeypatch):
@@ -37,6 +59,7 @@ def test_public_analysis_only_returns_official_retrieved_sources(monkeypatch):
     result = asyncio.run(legal.analyze_problem(legal.AnalyzeRequest(problem="A contract dispute")))
 
     assert result["sourceStatus"] == "retrieved"
+    assert result["status"] == "completed"
     assert len(result["sources"]) == 1
     assert result["sources"][0]["url"] == "https://pakistancode.gov.pk/law.pdf"
     assert result["sources"][0]["status"] == "unverified"

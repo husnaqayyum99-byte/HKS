@@ -24,6 +24,49 @@ export default function Results({ result, problem, answers = [], onRestart }) {
 
   const firstStep = result.actionPlan && result.actionPlan[0];
   const answered = answers.filter((a) => a.answer && a.answer.trim() !== "");
+  const evidenceUnavailable = result.status === "evidence_unavailable" || result.sourceStatus === "none";
+
+  if (evidenceUnavailable) {
+    const unavailableQuestions = result.follow_up_questions || [];
+    return (
+      <div className="container flow-page results">
+        <FlowSteps current={4} />
+        <header className="results-header">
+          <h1 className="page-title">{t("results.noSources")}</h1>
+        </header>
+
+        <Alert tone="warning" icon="alert" role="status">
+          {result.explanation?.[0] || t("results.noSources")}
+        </Alert>
+
+        <ResultSection id="situation" title={t("results.situation")} icon="user">
+          <blockquote className="quote">{problem.text}</blockquote>
+          {result.intake?.problem_summary && <p>{result.intake.problem_summary}</p>}
+        </ResultSection>
+
+        {unavailableQuestions.length > 0 && (
+          <ResultSection id="clarification" title={t("results.needsMoreInformation")} icon="info">
+            <ul className="plain-list">
+              {unavailableQuestions.slice(0, 3).map((question) => <li key={question}>{question}</li>)}
+            </ul>
+          </ResultSection>
+        )}
+
+        <section className="result-card action-card">
+          <div className="action-head">
+            <Icon name="check" size={22} />
+            <h2>{t("results.limitedNextStepTitle")}</h2>
+          </div>
+          <p>{t("results.limitedNextStep")}</p>
+        </section>
+
+        <Alert tone="info" icon="info">{t("results.disclaimer")}</Alert>
+        <div className="form-actions">
+          <Button onClick={onRestart}>{t("results.restart")}</Button>
+        </div>
+      </div>
+    );
+  }
 
   // The "On this page" links (only for sections that exist)
   const jumpLinks = [

@@ -38,6 +38,13 @@ def fetch_source(source: LegalSource) -> str:
 from urllib.parse import urljoin, urlparse
 
 
+def _is_official_url(url: str, official_domain: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    domain = official_domain.lower().rstrip(".")
+    return parsed.scheme == "https" and (host == domain or host.endswith(f".{domain}"))
+
+
 def find_relevant_links(
     source: LegalSource,
     research_question: str,
@@ -59,6 +66,8 @@ def find_relevant_links(
     )
 
     response.raise_for_status()
+    if not _is_official_url(response.url, source.official_domain):
+        return []
 
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -69,10 +78,6 @@ def find_relevant_links(
         )
     )
 
-    official_domain = urlparse(
-        url
-    ).netloc.lower()
-
     matches = []
 
     for link in soup.find_all("a", href=True):
@@ -82,9 +87,7 @@ def find_relevant_links(
 
         absolute_url = urljoin(url, href)
 
-        parsed = urlparse(absolute_url)
-
-        if parsed.netloc.lower() != official_domain:
+        if not _is_official_url(absolute_url, source.official_domain):
             continue
 
         combined_text = (
@@ -167,13 +170,7 @@ def fetch_url_text(
     to the registered official domain.
     """
 
-    registered_domain = urlparse(
-        source.search_url or f"https://{source.official_domain}"
-    ).netloc.lower()
-
-    requested_domain = urlparse(url).netloc.lower()
-
-    if requested_domain != registered_domain:
+    if not _is_official_url(url, source.official_domain):
         raise ValueError(
             "URL does not belong to the registered official domain."
         )
@@ -187,6 +184,8 @@ def fetch_url_text(
     )
 
     response.raise_for_status()
+    if not _is_official_url(response.url, source.official_domain):
+        raise ValueError("URL redirected outside the registered official domain.")
 
     content_type = response.headers.get(
         "content-type",

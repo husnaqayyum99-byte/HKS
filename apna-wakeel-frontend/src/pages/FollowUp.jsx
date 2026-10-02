@@ -11,10 +11,14 @@ import { useLanguage } from "../i18n/LanguageContext.jsx";
 // or typed text). That way, if the person switches language in the middle,
 // their answers are still correct.
 
-export default function FollowUp({ problem, onBack, onDone }) {
+export default function FollowUp({ problem, onBack, onDone, initialQuestions }) {
   const { t, language } = useLanguage();
-  const [questions, setQuestions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [questions, setQuestions] = useState(() => (initialQuestions || []).map((question, index) => (
+    typeof question === "string"
+      ? { id: `clarification-${index + 1}`, text: question, type: "text" }
+      : question
+  )));
+  const [loading, setLoading] = useState(!initialQuestions);
   const [loadError, setLoadError] = useState("");
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState({}); // { questionId: value }
@@ -25,6 +29,19 @@ export default function FollowUp({ problem, onBack, onDone }) {
     let cancelled = false;
     setLoading(true);
     setLoadError("");
+
+    if (initialQuestions) {
+      setQuestions(initialQuestions.map((question, index) => (
+        typeof question === "string"
+          ? { id: `clarification-${index + 1}`, text: question, type: "text" }
+          : question
+      )));
+      setIndex(0);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     getFollowUpQuestions({ problem: problem.text, province: problem.province, language })
       .then((list) => {
@@ -42,7 +59,7 @@ export default function FollowUp({ problem, onBack, onDone }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [problem, tryCount, language]);
+  }, [problem, tryCount, language, initialQuestions]);
 
   if (loading) {
     return (
@@ -128,6 +145,12 @@ export default function FollowUp({ problem, onBack, onDone }) {
   return (
     <div className="container flow-page">
       <FlowSteps current={2} />
+        {initialQuestions && (
+          <header>
+            <h1 className="page-title">{t("results.needsMoreInformation")}</h1>
+            <p className="page-intro">{t("results.clarificationIntro")}</p>
+          </header>
+        )}
 
       <div className="form-card">
         <p className="question-count" aria-live="polite">

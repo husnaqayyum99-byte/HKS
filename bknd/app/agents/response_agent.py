@@ -80,6 +80,11 @@ IMPORTANT RULES:
 18. If the evidence or missing facts do not establish whether a law
     applies, say what is uncertain and what information is needed instead
     of presenting a legal conclusion.
+19. A source's silence does not establish that a requirement is absent.
+    Never state that a procedure is not required unless the supplied
+    evidence affirmatively establishes that conclusion. If focused research
+    still does not answer the point, say that the retrieved sources do not
+    establish whether it is required.
 
 The response should help the user understand:
 - what their issue appears to be
