@@ -19,3 +19,10 @@ dist/
 
 # Python virtual environment
 bknd/.venv/
+
+bknd/.local_auth_store.json
+bknd/app.db
+bknd/uploads/
+bknd/.venv/
+.venv/
+apna-wakeel-frontend/file.jpe

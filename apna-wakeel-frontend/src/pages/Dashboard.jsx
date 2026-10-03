@@ -32,10 +32,29 @@ function getChatErrorKey(error) {
   return "chat.sendError";
 }
 
-function isOfficialLawUrl(value) {
+function isAllowedChatLink(value) {
   try {
     const url = new URL(value);
     return url.protocol === "https:" && [
+      "districtcourtschitral.gov.pk",
+      "www.districtcourtschitral.gov.pk",
+      "chitralpolice.gov.pk",
+      "www.chitralpolice.gov.pk",
+      "rescue.gov.pk",
+      "www.rescue.gov.pk",
+      "chitraltoday.net",
+      "mohr.gov.pk",
+      "www.mohr.gov.pk",
+      "complaints.kppolice.gov.pk",
+      "dawn.com",
+      "www.dawn.com",
+      "tribune.com.pk",
+      "shirkatgah.org",
+      "www.shirkatgah.org",
+      "app.com.pk",
+      "www.app.com.pk",
+      "hrcp-web.org",
+      "nomoredirectory.org",
       "pakistancode.gov.pk",
       "www.pakistancode.gov.pk",
       "kpcode.kp.gov.pk",
@@ -56,7 +75,7 @@ function ChatMessageContent({ content }) {
   const parts = String(content || "").split(/(https:\/\/[^\s]+)/g);
   return (
     <p>
-      {parts.map((part, index) => isOfficialLawUrl(part)
+      {parts.map((part, index) => isAllowedChatLink(part)
         ? <a key={index} href={part} target="_blank" rel="noreferrer">{part}</a>
         : part)}
     </p>
@@ -586,6 +605,39 @@ export default function Dashboard({ pathname, navigate, user, accessToken, onLog
           unresolved: t("verification.unresolved"),
           needDescription: t("chat.needDescription"),
           responseUnavailable: t("chat.responseUnavailable"),
+          referralsTitle: t("referrals.title"),
+          referralsEmergency: t("referrals.emergency"),
+          referralsQualification: t("referrals.qualification"),
+          referralsUnverified: t("referrals.unverified"),
+          referralsDirectoryNote: t("referrals.notExhaustive"),
+          referralsUpperNote: t("referrals.upperUnconfirmed"),
+          referralsDistrict_lower_chitral: t("referrals.district.lower"),
+          referralsDistrict_upper_chitral: t("referrals.district.upper"),
+          referralsDistrict_chitral_wide: t("referrals.district.chitralWide"),
+          referralsDistrict_national: t("referrals.district.national"),
+          referralsPhone: t("referrals.phone"),
+          referralsFax: t("referrals.fax"),
+          referralsEmail: t("referrals.email"),
+          referralsWebsite: t("referrals.website"),
+          referralsSource: t("referrals.source"),
+          referralsFree: t("referrals.freeService"),
+          referralsLastVerified: t("referrals.lastVerified"),
+          referralsConfidence: t("referrals.confidence"),
+          referralsConfidence_high: t("referrals.confidence.high"),
+          referralsConfidence_medium: t("referrals.confidence.medium"),
+          referralsConfidence_low: t("referrals.confidence.low"),
+          referralsCoverageLimits: t("referrals.coverageLimits"),
+          referralsCoverage_dlec: t("referrals.coverage.dlec"),
+          referralsCoverage_upper: t("referrals.coverage.upper"),
+          referralsCoverage_shelter: t("referrals.coverage.shelter"),
+          referralsCoverage_laja: t("referrals.coverage.laja"),
+          referralsReason_emergency: t("referrals.reason.emergency"),
+          referralsReason_urgent: t("referrals.reason.urgent"),
+          referralsReason_high_risk: t("referrals.reason.highRisk"),
+          referralsReason_legal_aid: t("referrals.reason.legalAid"),
+          referralsReason_criminal_detention: t("referrals.reason.detention"),
+          referralsReason_evidence_unavailable: t("referrals.reason.evidenceUnavailable"),
+          referralsReason_evidence_unresolved: t("referrals.reason.evidenceUnresolved"),
         },
         newChatTitle: t("chat.newChat"),
         accessToken,

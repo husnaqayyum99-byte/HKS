@@ -125,8 +125,15 @@ def test_public_analysis_uses_shared_pipeline_and_maps_claims_to_evidence(monkey
 def test_public_analysis_preserves_unresolved_status_when_no_evidence_exists(monkeypatch):
     monkeypatch.setattr(legal, "process_case", lambda *args, **kwargs: {
         "status": "evidence_unavailable",
-        "intake": {"problem_summary": "A legal matter."},
-        "classification": {"legal_domain": "unclear", "jurisdiction": "Unknown"},
+        "intake": {
+            "problem_summary": "A legal matter.",
+            "urgency": "urgent",
+            "needs_legal_aid": True,
+        },
+        "classification": {
+            "legal_domain": "child_protection",
+            "jurisdiction": "Khyber Pakhtunkhwa",
+        },
         "response": {},
         "evidence": [],
         "claim_verification": [],
@@ -142,6 +149,17 @@ def test_public_analysis_preserves_unresolved_status_when_no_evidence_exists(mon
     assert result["evidence"] == []
     assert result["sources"] == []
     assert result["timeline"] == []
+    assert result["urgency"] == "urgent"
+    assert result["needs_legal_aid"] is True
+    assert result["referral"]["recommended"] is True
+    assert {resource["id"] for resource in result["referral"]["resources"]} == {
+        "chitral_police_emergency",
+        "dlec",
+        "chitral_lower_court",
+        "chitral_bar_associations",
+        "kp_bar_council",
+        "mohr_1099",
+    }
 
 
 def test_public_analysis_keeps_research_question_to_evidence_links(monkeypatch):

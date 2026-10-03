@@ -438,6 +438,33 @@ textarea:focus, select:focus, .text-input:focus { outline: 3px solid var(--focus
 .public-path-facts dd { margin: 0.25rem 0 0; font-weight: 650; }
 .public-path-section { border-top: 1px solid var(--line); padding-top: 1rem; overflow-wrap: anywhere; }
 .public-path-section h3 { font-size: 1.15rem; }
+.referral-panel {
+  padding: 1rem; border: 1px solid var(--warning-line); border-radius: var(--radius-sm);
+  background: var(--warning-soft); overflow-wrap: anywhere;
+}
+.referral-panel h3 { margin-bottom: 0.35rem; }
+.referral-panel > p { margin-bottom: 0.7rem; }
+.referral-panel-emergency { border-color: var(--danger); background: var(--danger-soft); }
+.referral-emergency-note { font-weight: 650; }
+.referral-reasons, .referral-resources { display: grid; gap: 0.45rem; padding-inline-start: 1.25rem; }
+.referral-resources { margin-top: 0.85rem; }
+.referral-resources a { font-weight: 700; }
+.referral-resources p { color: var(--text-muted); font-size: 0.92rem; margin: 0.2rem 0 0; }
+.referral-resource-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+.referral-district, .referral-free-service {
+  display: inline-flex; width: fit-content; border: 1px solid var(--line-strong);
+  border-radius: 999px; padding: 0.05rem 0.5rem; color: var(--text-muted); font-size: 0.78rem;
+}
+.referral-unverified {
+  display: inline-flex; width: fit-content; margin-top: 0.25rem; padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning);
+  font-size: 0.82rem; font-weight: 700;
+}
+.referral-source a { overflow-wrap: anywhere; }
+.referral-coverage-limits { margin-top: 0.75rem; }
+.referral-coverage-limits h4 { margin: 0 0 0.35rem; font-size: 0.98rem; }
+.referral-coverage-limits ul { padding-inline-start: 1.25rem; }
+.referral-panel .referral-qualification { color: var(--text-muted); font-size: 0.9rem; margin: 0.8rem 0 0; }
 .public-path-list, .public-evidence-list { display: grid; gap: 0.9rem; padding-inline-start: 1.4rem; }
 .public-path-list li { padding-inline-start: 0.15rem; }
 .public-path-list small { display: block; color: var(--text-muted); overflow-wrap: anywhere; }

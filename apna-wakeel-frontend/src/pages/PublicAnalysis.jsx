@@ -2,6 +2,7 @@ import { useState } from "react";
 import Alert from "../components/Alert.jsx";
 import Button from "../components/Button.jsx";
 import CopyAnswerButton from "../components/CopyAnswerButton.jsx";
+import ReferralPanel from "../components/ReferralPanel.jsx";
 import { useLanguage } from "../i18n/LanguageContext.jsx";
 import { analyzePublicCase } from "../services/api.js";
 
@@ -166,6 +167,8 @@ export default function PublicAnalysis({ onHome }) {
               {t(`publicAnalysis.status.${result.status}`)}
             </span>
           </div>
+
+          <ReferralPanel referral={result.referral} />
 
           <section className="public-path-section">
             <h3>{t("publicAnalysis.understanding")}</h3>

@@ -108,6 +108,12 @@ export default function Home({ onStart, onPublicAnalysis }) {
             <h2 id="about-title">{t("about.title")}</h2>
             <p>{t("about.p1")}</p>
             <p>{t("about.p2")}</p>
+            <p>
+              <a href="https://www.districtcourtschitral.gov.pk/ContactUs/" target="_blank" rel="noopener noreferrer">
+                {t("about.legalAidLink")}
+              </a>{" "}
+              {t("about.legalAidNote")}
+            </p>
           </div>
           <div className="about-emblem">
             <Logo size={240} />

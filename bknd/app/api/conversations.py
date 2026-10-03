@@ -9,6 +9,7 @@ from sqlalchemy import bindparam, text
 from app.api.dependencies import get_authenticated_user
 from app.database.connection import engine
 from app.agents.orchestrator import process_case
+from app.legal_sources.referrals import build_referral_context
 from app.services.ai_service import GroqConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,100 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         "clarificationPrompt": "To understand your situation, please clarify:",
         "limitedNextStep": "Keep relevant messages, documents, photos, and dates together.",
         "responseUnavailable": "I could not prepare a response from the available information. Please try again.",
+        "referralsTitle": "Support and official referral options",
+        "referralsEmergency": "If you are in immediate danger, move to a safe place and contact local emergency services or police now. This prototype could not verify one emergency number for all of Pakistan.",
+        "referralsQualification": "These referrals are not confirmed appointments or eligibility. Verify current coverage, contact routes, and procedures directly. The Chitral applicability of the KP Bar Council listing could not be confirmed.",
+        "referralsReason_emergency": "The intake indicates emergency urgency.",
+        "referralsReason_urgent": "The intake indicates urgent attention.",
+        "referralsReason_high_risk": "This matter may involve a high-risk protection or crime concern.",
+        "referralsReason_legal_aid": "You indicated difficulty affording legal help.",
+        "referralsReason_evidence_unavailable": "No official evidence was retrieved for this matter.",
+        "referralsReason_evidence_unresolved": "The official-source research could not verify an answer.",
+        "referralsUnverified": "Unverified — please confirm before relying on this.",
+        "referralsDirectoryNote": "This curated list is not exhaustive.",
+        "referralsUpperNote": "Upper Chitral contacts are not confirmed. Only entries verified for Upper Chitral are shown.",
+        "referralsDistrict_lower_chitral": "Lower Chitral",
+        "referralsDistrict_upper_chitral": "Upper Chitral",
+        "referralsDistrict_chitral_wide": "Chitral-wide",
+        "referralsDistrict_national": "National",
+        "referralsPhone": "Phone",
+        "referralsFax": "Fax",
+        "referralsEmail": "Email",
+        "referralsWebsite": "Website",
+        "referralsSource": "Source",
+        "referralsFree": "Free service",
+        "referralsLastVerified": "Directory checked",
+        "referralsConfidence": "Confidence",
+        "referralsConfidence_high": "High",
+        "referralsConfidence_medium": "Medium",
+        "referralsConfidence_low": "Low",
+        "referralsCoverageLimits": "Coverage limits",
+        "referralsCoverage_dlec": "The DLEC application form and contact person could not be confirmed.",
+        "referralsCoverage_upper": "Official Upper Chitral court, police, and DLEC contacts could not be confirmed.",
+        "referralsCoverage_shelter": "A women's crisis centre or Dar-ul-Aman, and the Dispute Resolution Council in Chitral, could not be confirmed.",
+        "referralsCoverage_laja": "Whether LAJA serves Chitral or KP could not be confirmed; Chitral users are not referred to LAJA.",
     }
     message_labels.update({key: value for key, value in (labels or {}).items() if isinstance(value, str)})
+
+    referral = build_referral_context(pipeline_result)
+
+    def format_referrals() -> str:
+        if not referral["recommended"]:
+            return ""
+        sections = [message_labels["referralsTitle"]]
+        if referral.get("emergency"):
+            sections.append(message_labels["referralsEmergency"])
+        sections.extend(
+            message_labels.get(f"referralsReason_{reason}", reason)
+            for reason in referral["reasons"]
+        )
+        for resource in referral["resources"]:
+            district_label = message_labels.get(
+                "referralsDistrict_"
+                + resource["district"].replace(" ", "_").replace("-", "_").casefold(),
+                resource["district"],
+            )
+            lines = [f"- {resource['name']} ({district_label})"]
+            if resource["confidence"] != "high":
+                lines.append(f"  {message_labels['referralsUnverified']}")
+            if resource.get("phone"):
+                lines.append(f"  {message_labels['referralsPhone']}: {resource['phone']}")
+            lines.append(
+                f"  {message_labels['referralsConfidence']}: "
+                f"{message_labels.get('referralsConfidence_' + resource['confidence'], resource['confidence'])}"
+            )
+            lines.append(f"  {message_labels['referralsLastVerified']}: {resource['last_verified']}")
+            if resource.get("fax"):
+                lines.append(f"  {message_labels['referralsFax']}: {resource['fax']}")
+            if resource.get("email"):
+                lines.append(f"  {message_labels['referralsEmail']}: {resource['email']}")
+            if resource.get("website"):
+                lines.append(f"  {message_labels['referralsWebsite']}: {resource['website']}")
+            if resource.get("notes"):
+                lines.append(f"  {resource['notes']}")
+            lines.append(f"  {message_labels['referralsSource']}: {resource['source_url']}")
+            if resource.get("free_service") is True:
+                lines.append(f"  {message_labels['referralsFree']}")
+            sections.append("\n".join(lines))
+        if referral.get("upper_chitral_contacts_unconfirmed"):
+            sections.append(message_labels["referralsUpperNote"])
+        sections.append(message_labels["referralsDirectoryNote"])
+        sections.append(
+            message_labels["referralsCoverageLimits"]
+            + ":\n- "
+            + "\n- ".join((
+                message_labels["referralsCoverage_dlec"],
+                message_labels["referralsCoverage_upper"],
+                message_labels["referralsCoverage_shelter"],
+                message_labels["referralsCoverage_laja"],
+            ))
+        )
+        sections.append(message_labels["referralsQualification"])
+        return "\n".join(sections)
+
+    def append_referrals(text: str) -> str:
+        referrals = format_referrals()
+        return f"{text}\n\n{referrals}" if referrals else text
 
     def format_references(evidence: list[dict], verification: list[dict]) -> list[str]:
         references = []
@@ -88,7 +181,7 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
             follow_up.get("conversational_message") or ""
         ).strip()
         if conversational_message:
-            return conversational_message
+            return append_referrals(conversational_message)
 
         summary = str(
             pipeline_result.get("intake", {}).get("problem_summary") or ""
@@ -99,7 +192,8 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
             if str(question).strip()
         ]
         fallback = [summary, "\n".join(questions)]
-        return "\n\n".join(part for part in fallback if part) or message_labels["responseUnavailable"]
+        response = "\n\n".join(part for part in fallback if part) or message_labels["responseUnavailable"]
+        return append_referrals(response)
 
     if pipeline_result.get("status") == "evidence_unavailable":
         intake = pipeline_result.get("intake", {})
@@ -117,6 +211,9 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
                 for index, question in enumerate(questions, 1)
             )
             sections.append(f"{message_labels['optionalDetails']}:\n{formatted_questions}")
+        referrals = format_referrals()
+        if referrals:
+            sections.append(referrals)
         sections.append(message_labels["legalDisclaimer"])
         return "\n\n".join(sections)
 
@@ -137,6 +234,9 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         )
         if references:
             sections.append(f"{message_labels['officialReferences']}:\n" + "\n".join(references[:8]))
+        referrals = format_referrals()
+        if referrals:
+            sections.append(referrals)
         sections.append(message_labels["legalDisclaimer"])
         return "\n\n".join(sections)
 
@@ -167,6 +267,10 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
             for index, question in enumerate(questions, 1)
         )
         sections.append(f"{message_labels['optionalDetails']}:\n{optional_questions}")
+
+    referrals = format_referrals()
+    if referrals:
+        sections.append(referrals)
 
     uncertainty = response.get("uncertainty") or []
     if uncertainty:

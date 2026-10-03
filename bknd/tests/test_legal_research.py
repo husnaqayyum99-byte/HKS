@@ -10,6 +10,7 @@ from app.agents.orchestrator import process_case
 from app.api.conversations import format_case_response
 from app.legal_sources.source_registry import LegalSource, get_relevant_sources
 from app.legal_sources.domain_catalog import law_search_candidates
+from app.legal_sources.referrals import CHITRAL_LEGAL_DIRECTORY, build_referral_context
 from app.legal_sources import evidence_retriever
 from app.legal_sources import source_registry
 from app.legal_sources import source_health
@@ -202,20 +203,26 @@ def test_classification_prompt_prevents_collapsing_fraud_harassment_and_accident
 
 
 def test_intake_preserves_structured_road_incident_fields(monkeypatch):
+    prompts = []
     payload = {
         "problem_summary": "A car was damaged in a road accident.",
         "category": "traffic_accident",
         "location": "Chitral",
         "facts": ["The other driver disputes responsibility."],
         "missing_information": [],
-        "urgency": "normal",
+        "urgency": "urgent",
+        "needs_legal_aid": True,
         "incident_location": "Chitral",
         "incident_type": "road accident",
         "vehicle_damage": "car body damage",
         "responsibility_dispute": True,
         "compensation_dispute": True,
     }
-    monkeypatch.setattr(intake_agent, "generate_response", lambda _prompt: json.dumps(payload))
+    monkeypatch.setattr(
+        intake_agent,
+        "generate_response",
+        lambda prompt: prompts.append(prompt) or json.dumps(payload),
+    )
 
     result = intake_agent.intake_case("My car was damaged in Chitral.")
 
@@ -224,6 +231,9 @@ def test_intake_preserves_structured_road_incident_fields(monkeypatch):
     assert result.vehicle_damage == "car body damage"
     assert result.responsibility_dispute is True
     assert result.compensation_dispute is True
+    assert result.urgency == "urgent"
+    assert result.needs_legal_aid is True
+    assert "Set needs_legal_aid to true only when the user says" in prompts[0]
 
 
 def test_law_candidates_follow_explicit_subtypes_and_jurisdiction():
@@ -367,6 +377,22 @@ def test_unavailable_registered_source_is_skipped_safely(monkeypatch):
     assert evidence_retriever.collect_evidence([source], ["CNIC replacement procedure"]) == []
 
 
+def test_access_denied_official_source_produces_no_unverified_evidence(monkeypatch):
+    source = next(source for source in get_relevant_sources("Pakistan", "identity documents"))
+    response = Mock(status_code=403, text="Access Denied")
+    denied = evidence_retriever.requests.HTTPError("403 Client Error", response=response)
+    monkeypatch.setattr(
+        evidence_retriever,
+        "find_relevant_links",
+        Mock(side_effect=denied),
+    )
+
+    assert evidence_retriever.collect_evidence(
+        [source],
+        ["CNIC replacement procedure"],
+    ) == []
+
+
 def test_off_domain_redirect_is_rejected():
     source = next(
         source
@@ -472,6 +498,73 @@ def test_source_health_flags_external_redirect_and_outage(monkeypatch):
     assert outage["available"] is False
     assert outage["content_accessible"] is False
     assert outage["error"] == "ConnectionError"
+    assert "Connection failed" in outage["failure_reason"]
+
+
+def test_source_health_retries_transient_connection_failures(monkeypatch):
+    source = get_relevant_sources("Pakistan", "identity documents")[0]
+    response = Mock()
+    response.url = source.search_url
+    response.content = b"<html><body>Official source content</body></html>"
+    response.text = response.content.decode()
+    response.headers = {"content-type": "text/html"}
+    response.status_code = 200
+    response.raise_for_status = Mock()
+    attempts = []
+
+    def fail_once(*_args, **_kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise source_health.requests.Timeout("temporary timeout")
+        return response
+
+    monkeypatch.setattr(source_health.requests, "get", fail_once)
+    monkeypatch.setattr(source_health.time, "sleep", lambda _delay: None)
+
+    result = source_health.check_source_health(source)
+
+    assert result["status"] == "available"
+    assert len(attempts) == 2
+
+
+def test_source_health_explains_403_without_retrying(monkeypatch):
+    source = get_relevant_sources("Pakistan", "identity documents")[0]
+    response = Mock()
+    response.status_code = 403
+    response.url = source.search_url
+    response.text = "<html><body>Access Denied</body></html>"
+    error = source_health.requests.HTTPError("403 Client Error", response=response)
+    attempts = []
+
+    def denied(*_args, **_kwargs):
+        attempts.append(True)
+        raise error
+
+    monkeypatch.setattr(source_health.requests, "get", denied)
+    monkeypatch.setattr(source_health.time, "sleep", lambda _delay: None)
+
+    result = source_health.check_source_health(source)
+
+    assert result["status"] == "unavailable"
+    assert result["http_status"] == 403
+    assert result["requested_url"] == source.search_url
+    assert "HTTP 403" in result["failure_reason"]
+    assert len(attempts) == 1
+
+
+def test_source_health_identifies_cloudflare_access_block(monkeypatch):
+    source = get_relevant_sources("Khyber Pakhtunkhwa", "traffic services")[-1]
+    response = Mock()
+    response.status_code = 403
+    response.url = source.search_url
+    response.text = "<html><title>Just a moment...</title>Cloudflare challenge</html>"
+    error = source_health.requests.HTTPError("403 Client Error", response=response)
+    monkeypatch.setattr(source_health.requests, "get", Mock(side_effect=error))
+
+    result = source_health.check_source_health(source)
+
+    assert result["status"] == "unavailable"
+    assert "Cloudflare challenge blocks automated access" in result["failure_reason"]
 
 
 def test_statute_matching_respects_jurisdiction_and_act_title():
@@ -662,6 +755,222 @@ def test_evidence_unavailable_chat_preserves_questions_and_safe_step():
     assert "Which city did this happen in?" in text
     assert "Keep relevant messages, documents, photos, and dates together." in text
     assert "No official source evidence was retrieved" in text
+
+
+def test_urgent_high_risk_and_legal_aid_cases_receive_official_referrals():
+    referral = build_referral_context({
+        "status": "evidence_unavailable",
+        "intake": {
+            "urgency": "emergency",
+            "needs_legal_aid": True,
+        },
+        "classification": {
+            "legal_domain": "harassment_protection",
+            "legal_subtype": "domestic_violence",
+            "jurisdiction": "Khyber Pakhtunkhwa",
+        },
+    })
+
+    assert referral["recommended"] is True
+    assert referral["emergency"] is True
+    assert referral["reasons"] == [
+        "emergency",
+        "high_risk",
+        "legal_aid",
+        "evidence_unavailable",
+    ]
+    assert [resource["id"] for resource in referral["resources"]] == [
+        "chitral_police_emergency",
+        "dlec",
+        "chitral_lower_court",
+        "chitral_bar_associations",
+        "kp_bar_council",
+        "mohr_1099",
+        "madadgaar_1098",
+        "kp_bolo_helpline",
+    ]
+    assert referral["resources"][0]["phone"] == "15"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_reason"),
+    [
+        ("evidence_unresolved", "evidence_unresolved"),
+        ("unable_to_verify", "evidence_unresolved"),
+    ],
+)
+def test_unresolved_cases_receive_a_legal_aid_referral(status, expected_reason):
+    referral = build_referral_context({
+        "status": status,
+        "intake": {"urgency": "normal"},
+        "classification": {"legal_domain": "tenancy"},
+    })
+
+    assert referral["recommended"] is True
+    assert referral["reasons"] == [expected_reason]
+    assert referral["resources"][0]["id"] == "dlec"
+    assert referral["resources"][0]["free_service"] is True
+    assert "kp_bar_council" in {item["id"] for item in referral["resources"]}
+
+
+def test_reported_inability_to_afford_a_lawyer_triggers_referral():
+    referral = build_referral_context({
+        "status": "completed",
+        "intake": {"urgency": "normal", "needs_legal_aid": True},
+        "classification": {"legal_domain": "tenancy", "jurisdiction": "Pakistan"},
+    })
+
+    assert referral["recommended"] is True
+    assert referral["reasons"] == ["legal_aid"]
+    assert [resource["id"] for resource in referral["resources"]][0] == "dlec"
+    assert "mohr_1099" in [resource["id"] for resource in referral["resources"]]
+
+
+def test_low_risk_resolved_case_without_reported_cost_barrier_has_no_referral():
+    referral = build_referral_context({
+        "status": "completed",
+        "intake": {"urgency": "normal", "needs_legal_aid": False},
+        "classification": {"legal_domain": "tenancy"},
+    })
+
+    assert referral == {
+        "recommended": False,
+        "urgency": "normal",
+        "reasons": [],
+        "district": None,
+        "upper_chitral_contacts_unconfirmed": False,
+        "list_not_exhaustive": True,
+        "coverage_limits": [
+            "The DLEC application form and contact person could not be confirmed.",
+            "Official Upper Chitral court, police, and DLEC contacts could not be confirmed.",
+            "A women's crisis centre or Dar-ul-Aman, and the Dispute Resolution Council in Chitral, could not be confirmed.",
+            "Whether LAJA serves Chitral or KP could not be confirmed; Chitral users are not referred to LAJA.",
+        ],
+        "resources": [],
+    }
+
+
+def test_intake_risk_category_still_triggers_referrals_when_classifier_is_unclear():
+    referral = build_referral_context({
+        "status": "completed",
+        "intake": {"category": "child_protection"},
+        "classification": {"legal_domain": "unclear", "jurisdiction": "Pakistan"},
+    })
+
+    assert referral["recommended"] is True
+    assert "high_risk" in referral["reasons"]
+
+
+def test_urgent_chat_response_includes_referral_contacts_and_limits():
+    text = format_case_response({
+        "status": "evidence_unresolved",
+        "intake": {"urgency": "emergency", "location": "Lower Chitral"},
+        "classification": {
+            "legal_domain": "fraud_cybercrime",
+            "locality": "Lower Chitral",
+            "jurisdiction": "Khyber Pakhtunkhwa",
+        },
+        "response": {"answer": "The official evidence does not establish an answer."},
+    })
+
+    assert "move to a safe place" in text
+    assert "Phone: 15" in text
+    assert "Phone: 1122" in text
+    assert text.index("Phone: 15") < text.index("Phone: 1122")
+    assert "051-9106691; 1799" in text
+    assert "The supplied sources conflict" in text
+    assert "This curated list is not exhaustive." in text
+
+
+def test_curated_referral_entries_have_source_and_verification_metadata():
+    assert CHITRAL_LEGAL_DIRECTORY
+    for entry in CHITRAL_LEGAL_DIRECTORY:
+        assert entry["source_url"].startswith("https://")
+        assert entry["last_verified"] == "2026-10-04"
+        assert entry["confidence"] in {"high", "medium", "low"}
+        assert entry["verified"] is (entry["confidence"] == "high")
+        assert entry["district"] in {
+            "Lower Chitral",
+            "Upper Chitral",
+            "Chitral-wide",
+            "national",
+        }
+        assert "phone" in entry and "website" in entry
+
+
+def test_dlec_is_primary_free_legal_aid_referral():
+    referral = build_referral_context({
+        "status": "completed",
+        "intake": {
+            "location": "Lower Chitral",
+            "needs_legal_aid": True,
+        },
+        "classification": {"locality": "Lower Chitral"},
+    })
+
+    assert referral["resources"][0]["id"] == "dlec"
+    assert referral["resources"][0]["free_service"] is True
+
+
+def test_kp_legal_aid_desk_is_only_referred_for_prison_or_detention_cases():
+    not_detained = build_referral_context({
+        "status": "completed",
+        "intake": {
+            "problem_summary": "I need free legal aid for a civil dispute.",
+            "location": "Lower Chitral",
+            "needs_legal_aid": True,
+        },
+        "classification": {"locality": "Lower Chitral"},
+    })
+    detained = build_referral_context({
+        "status": "completed",
+        "intake": {
+            "problem_summary": "My family member is a prisoner facing a criminal case.",
+            "location": "Lower Chitral",
+        },
+        "classification": {"locality": "Lower Chitral"},
+    })
+
+    assert "kp_legal_aid_desk" not in {item["id"] for item in not_detained["resources"]}
+    assert "kp_legal_aid_desk" in {item["id"] for item in detained["resources"]}
+
+
+def test_upper_chitral_referrals_include_only_verified_applicable_entries():
+    referral = build_referral_context({
+        "status": "evidence_unavailable",
+        "intake": {
+            "location": "Upper Chitral",
+            "needs_legal_aid": True,
+            "urgency": "urgent",
+        },
+        "classification": {
+            "legal_domain": "child_protection",
+            "locality": "Upper Chitral",
+        },
+    })
+
+    assert referral["upper_chitral_contacts_unconfirmed"] is True
+    assert [item["id"] for item in referral["resources"]] == [
+        "chitral_police_emergency",
+        "mohr_1099",
+    ]
+    assert all(item["verified"] is True for item in referral["resources"])
+    assert all(item["district"] in {"Upper Chitral", "Chitral-wide", "national"} for item in referral["resources"])
+
+
+def test_nccia_replaces_fia_for_cybercrime_referrals():
+    referral = build_referral_context({
+        "status": "completed",
+        "intake": {"location": "Lower Chitral"},
+        "classification": {
+            "legal_domain": "fraud_cybercrime",
+            "locality": "Lower Chitral",
+        },
+    })
+
+    resource_ids = {item["id"] for item in referral["resources"]}
+    assert "nccia_cybercrime" in resource_ids
+    assert not any("fia" in item["id"].casefold() for item in referral["resources"])
 
 
 def test_chat_agents_request_natural_roman_urdu(monkeypatch):

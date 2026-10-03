@@ -6,6 +6,7 @@ from groq import RateLimitError
 from pydantic import BaseModel, Field, field_validator
 
 from app.agents.orchestrator import process_case
+from app.legal_sources.referrals import build_referral_context
 from app.legal_sources.source_registry import get_relevant_sources
 from app.services.ai_service import GroqConfigurationError
 
@@ -163,6 +164,9 @@ def _build_public_result(pipeline_result: dict) -> dict:
 
     return {
         "status": status,
+        "urgency": str(intake.get("urgency") or "unclear"),
+        "needs_legal_aid": intake.get("needs_legal_aid") is True,
+        "referral": build_referral_context(pipeline_result),
         "understanding": intake.get("problem_summary", ""),
         "facts": intake.get("facts", []),
         "incident_location": intake.get("incident_location"),
