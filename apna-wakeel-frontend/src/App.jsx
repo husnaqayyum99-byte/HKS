@@ -32,7 +32,11 @@ export default function App() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (user && !pathname.startsWith("/app") && !["/forgot-password", "/reset-password", "/analysis"].includes(pathname)) navigate("/app", true);
+    if (pathname === "/analysis") {
+      navigate(user ? "/app" : "/", true);
+      return;
+    }
+    if (user && !pathname.startsWith("/app") && !["/forgot-password", "/reset-password", "/public-analysis"].includes(pathname)) navigate("/app", true);
     if (!user && pathname.startsWith("/app")) navigate("/login", true);
   }, [authLoading, user, pathname]);
 
@@ -113,9 +117,10 @@ export default function App() {
             {pathname === "/reset-password" && (
               <ResetPassword onComplete={() => navigate("/login", true)} onBack={() => navigate("/login")} />
             )}
-            {pathname === "/analysis" && <PublicAnalysis />}
-            {!onAuthPage && pathname !== "/analysis" && (
-              <Home onStart={() => navigate("/signup")} onAnalyze={() => navigate("/analysis")} />
+            {!onAuthPage && (
+              pathname === "/public-analysis"
+                ? <PublicAnalysis onHome={() => navigate(user ? "/app" : "/")} />
+                : <Home onStart={() => navigate("/signup")} onPublicAnalysis={() => navigate("/public-analysis")} />
             )}
           </div>
         )}

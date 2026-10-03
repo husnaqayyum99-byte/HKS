@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.services.ai_service import generate_response
 from app.legal_sources.evidence import EvidenceItem
+from app.legal_sources.source_registry import jurisdiction_scope
 
 
 class ResearchResult(BaseModel):
@@ -53,6 +54,16 @@ Your job is to determine:
 5. laws_to_check
 
 Research questions should describe what needs to be verified.
+Decompose the actual matter into distinct, answerable questions when material,
+including the applicable law/rule, competent authority, procedure, required
+documents, deadlines or conditions, and jurisdiction. Include only aspects
+relevant to this case and do not collapse these into one generic search.
+Use every known fact from the intake and classification to target each question.
+Do not ask the user for facts here; express what remains unknown as research needs.
+Treat the classified jurisdiction as the factual baseline. Do not replace it
+with a different province, district, or authority based on inference. Include
+only relevant source types and jurisdiction levels in the research preferences;
+for an unknown jurisdiction, keep priority_jurisdictions empty.
 
 Source types should identify appropriate authoritative sources,
 for example:
@@ -90,7 +101,9 @@ Return ONLY valid JSON.
 Required JSON structure:
 
 {{
-    "research_questions": [],
+    "research_questions": [
+        "An individual question for each material legal issue"
+    ],
     "source_types": [],
     "priority_jurisdictions": [],
     "evidence_needed": [],
@@ -110,7 +123,41 @@ CLASSIFICATION INFORMATION:
 
     try:
         data = json.loads(raw_response)
-        data["research_questions"] = data.get("research_questions", [])[:3]
+        questions = data.get("research_questions", [])
+        if not isinstance(questions, list):
+            raise ValueError("Research questions must be a list.")
+        data["research_questions"] = list(dict.fromkeys(
+            question.strip()
+            for question in questions
+            if isinstance(question, str) and question.strip()
+        ))[:12]
+
+        source_types = data.get("source_types", [])
+        priority_jurisdictions = data.get("priority_jurisdictions", [])
+        if not isinstance(source_types, list) or not isinstance(priority_jurisdictions, list):
+            raise ValueError("Research source preferences must be lists.")
+        data["source_types"] = list(dict.fromkeys(
+            value.strip()
+            for value in source_types
+            if isinstance(value, str) and value.strip()
+        ))[:12]
+
+        classified_jurisdiction = str(classification_data.get("jurisdiction") or "").strip()
+        classified_scope = jurisdiction_scope(classified_jurisdiction)
+        allowed_scopes = {classified_scope} if classified_scope else set()
+        if classified_scope == "khyber pakhtunkhwa":
+            allowed_scopes.add("federal")
+        ordered_priorities = [classified_jurisdiction] if classified_scope else []
+        seen_priorities = {classified_jurisdiction.casefold()} if classified_scope else set()
+        for value in priority_jurisdictions:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            normalized_value = " ".join(value.casefold().split())
+            scope = jurisdiction_scope(value)
+            if scope in allowed_scopes and normalized_value not in seen_priorities:
+                ordered_priorities.append(value.strip())
+                seen_priorities.add(normalized_value)
+        data["priority_jurisdictions"] = ordered_priorities[:12]
         return ResearchResult(**data)
 
     except (json.JSONDecodeError, ValueError) as e:
@@ -175,8 +222,12 @@ RETRIEVED EVIDENCE:
 
     try:
         data = json.loads(raw_response)
-        data["research_questions"] = list(dict.fromkeys(data.get("research_questions", [])))[:4]
-        data["laws_to_check"] = list(dict.fromkeys(data.get("laws_to_check", [])))[:4]
+        questions = data.get("research_questions", [])
+        laws = data.get("laws_to_check", [])
+        if not isinstance(questions, list) or not isinstance(laws, list):
+            raise ValueError("Evidence gap questions and law names must be lists.")
+        data["research_questions"] = list(dict.fromkeys(questions))[:4]
+        data["laws_to_check"] = list(dict.fromkeys(laws))[:4]
         return EvidenceGapPlan(**data)
     except (json.JSONDecodeError, TypeError, ValueError) as error:
         raise ValueError(f"Evidence Gap Agent returned invalid data: {error}") from error

@@ -9,6 +9,7 @@ from sqlalchemy import bindparam, text
 from app.api.dependencies import get_authenticated_user
 from app.database.connection import engine
 from app.agents.orchestrator import process_case
+from app.services.ai_service import GroqConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,11 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         "legalDisclaimer": "This is general legal information, not legal advice. Confirm important steps with a qualified local lawyer.",
         "underReview": " [Under Review]",
         "underReviewNotice": "The Pakistan Code marks at least one consolidated text as under review; check the relevant Gazette notification for later amendments.",
+        "sourceExcerpt": "Relevant excerpt",
+        "researchQuestion": "Related research question",
+        "supported": "Supported",
+        "contradicted": "Contradicted",
+        "unresolved": "Unresolved",
         "needDescription": "Please briefly describe what happened and where. Share what outcome you need; you can leave out details you do not know.",
         "clarificationPrompt": "To understand your situation, please clarify:",
         "limitedNextStep": "Keep relevant messages, documents, photos, and dates together.",
@@ -42,33 +48,69 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
     }
     message_labels.update({key: value for key, value in (labels or {}).items() if isinstance(value, str)})
 
+    def format_references(evidence: list[dict], verification: list[dict]) -> list[str]:
+        references = []
+        for item in evidence:
+            source_url = item.get("source_url")
+            reference = item.get("citation") or item.get("source_title") or item.get("source_name")
+            if not reference or not source_url:
+                continue
+            source_status = (
+                message_labels["underReview"]
+                if item.get("official_status") == "Under Review"
+                else f" [{item['official_status']}]" if item.get("official_status")
+                else f" [{message_labels['sourceVerified'] if item.get('verified') is True else message_labels['sourceRetrieved']}]"
+            )
+            lines = [f"- {reference}{source_status}", f"  {source_url}"]
+            excerpt = str(item.get("relevant_text") or "").strip()
+            if excerpt:
+                lines.append(f"  {message_labels['sourceExcerpt']}: {excerpt[:900]}")
+            for result in verification:
+                matched = any(
+                    isinstance(used, dict) and used.get("source_url") == source_url
+                    for used in (result.get("evidence_used") or [])
+                )
+                if matched:
+                    status = result.get("status", "unresolved")
+                    label = message_labels.get(status, message_labels["unresolved"])
+                    lines.append(
+                        f"  {message_labels['researchQuestion']} ({label}): {result.get('claim', '')}"
+                    )
+            references.append("\n".join(lines))
+        return references
+
     if pipeline_result.get("status") == "needs_description":
         return message_labels["needDescription"]
 
     if pipeline_result.get("status") == "needs_clarification":
-        intake = pipeline_result.get("intake", {})
-        sections = []
-        if intake.get("problem_summary"):
-            sections.append(f"{message_labels['caseSummary']}:\n{intake['problem_summary']}")
-        questions = (pipeline_result.get("follow_up", {}).get("questions") or [])[:3]
-        if questions:
-            formatted_questions = "\n".join(
-                f"{index}. {question}"
-                for index, question in enumerate(questions, 1)
-            )
-            sections.append(f"{message_labels['clarificationPrompt']}\n{formatted_questions}")
-        return "\n\n".join(sections) or message_labels["responseUnavailable"]
+        follow_up = pipeline_result.get("follow_up", {})
+        conversational_message = str(
+            follow_up.get("conversational_message") or ""
+        ).strip()
+        if conversational_message:
+            return conversational_message
+
+        summary = str(
+            pipeline_result.get("intake", {}).get("problem_summary") or ""
+        ).strip()
+        questions = [
+            str(question).strip()
+            for question in follow_up.get("questions", [])
+            if str(question).strip()
+        ]
+        fallback = [summary, "\n".join(questions)]
+        return "\n\n".join(part for part in fallback if part) or message_labels["responseUnavailable"]
 
     if pipeline_result.get("status") == "evidence_unavailable":
         intake = pipeline_result.get("intake", {})
         sections = []
         if intake.get("problem_summary"):
-            sections.append(f"{message_labels['caseSummary']}:\n{intake['problem_summary']}")
+            sections.append(str(intake["problem_summary"]))
         sections.extend((
             message_labels["noOfficialEvidence"],
             f"{message_labels['nextSteps']}:\n1. {message_labels['limitedNextStep']}",
         ))
-        questions = (pipeline_result.get("follow_up", {}).get("questions") or [])[:3]
+        questions = pipeline_result.get("follow_up", {}).get("questions") or []
         if questions:
             formatted_questions = "\n".join(
                 f"{index}. {question}"
@@ -78,17 +120,33 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         sections.append(message_labels["legalDisclaimer"])
         return "\n\n".join(sections)
 
+    if pipeline_result.get("status") == "evidence_unresolved":
+        verification = pipeline_result.get("verification", [])
+        sections = []
+        answer = (pipeline_result.get("response") or {}).get("answer")
+        sections.append(answer or "The retrieved official sources do not establish a verified answer to the material questions. Those points remain unresolved.")
+        if verification:
+            details = "\n".join(
+                f"- [{message_labels.get(item.get('status', 'unresolved'), message_labels['unresolved'])}] {item.get('claim', '')}: {item.get('reasoning', '')}"
+                for item in verification
+            )
+            sections.append(f"{message_labels['uncertainty']}:\n{details}")
+        references = format_references(
+            pipeline_result.get("evidence", []),
+            verification,
+        )
+        if references:
+            sections.append(f"{message_labels['officialReferences']}:\n" + "\n".join(references[:8]))
+        sections.append(message_labels["legalDisclaimer"])
+        return "\n\n".join(sections)
+
     intake = pipeline_result.get("intake", {})
     response = pipeline_result.get("response", {})
     sections = []
 
-    case_summary = intake.get("problem_summary")
-    if case_summary:
-        sections.append(f"{message_labels['caseSummary']}:\n{case_summary}")
-
     answer = response.get("answer")
     if answer:
-        sections.append(f"{message_labels['aiGenerated']}\n{message_labels['currentGuidance']}:\n{answer}")
+        sections.append(answer)
 
     next_steps = response.get("next_steps") or [
         "Keep relevant messages, documents, photos, and dates together.",
@@ -102,7 +160,7 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
         documents = "\n".join(f"- {item}" for item in documents_needed)
         sections.append(f"{message_labels['documentsNeeded']}:\n{documents}")
 
-    questions = (pipeline_result.get("follow_up", {}).get("questions") or [])[:3]
+    questions = pipeline_result.get("follow_up", {}).get("questions") or []
     if questions:
         optional_questions = "\n".join(
             f"{index}. {question}"
@@ -114,19 +172,11 @@ def format_case_response(pipeline_result: dict, labels: dict[str, str] | None = 
     if uncertainty:
         sections.append(f"{message_labels['uncertainty']}:\n" + "\n".join(f"- {item}" for item in uncertainty))
 
-    legal_references = []
-    seen_references = set()
-    for item in pipeline_result.get("evidence", []):
-        reference = item.get("citation") or item.get("source_title")
-        source_url = item.get("source_url")
-        if not reference or not source_url:
-            continue
-        key = (reference, source_url)
-        if key in seen_references:
-            continue
-        seen_references.add(key)
-        status = message_labels["underReview"] if item.get("official_status") == "Under Review" else f" [{item['official_status']}]" if item.get("official_status") else f" [{message_labels['sourceVerified'] if item.get('verified') is True else message_labels['sourceRetrieved']}]"
-        legal_references.append(f"- {reference}{status}\n  {source_url}")
+    legal_references = format_references(
+        pipeline_result.get("evidence", []),
+        pipeline_result.get("verification", []),
+    )
+    legal_references = list(dict.fromkeys(legal_references))
 
     if legal_references:
         sections.append(f"{message_labels['officialReferences']}:\n" + "\n".join(legal_references[:8]))
@@ -444,7 +494,7 @@ def create_message(
             },
         )
 
-    # -----------------------------------------------------
+        # -----------------------------------------------------
     # 4. Run complete Apna Wakeel pipeline WITH CONTEXT
     # -----------------------------------------------------
 
@@ -458,14 +508,20 @@ def create_message(
                 for document in selected_documents
             ),
         )
+    except GroqConfigurationError as error:
+        logger.error("Legal AI configuration error: %s", error)
+        raise HTTPException(status_code=503, detail=str(error)) from None
     except Exception as e:
-        logger.error("Case pipeline failed: type=%s", type(e).__name__)
+        logger.exception("Case pipeline failed")
         if isinstance(e, RateLimitError):
             raise HTTPException(
                 status_code=429,
                 detail="The AI service has reached its current usage limit. Please check your Groq quota and try again later.",
             ) from e
-        raise HTTPException(status_code=503, detail="The legal analysis service is temporarily unavailable. Please try again.") from None
+        raise HTTPException(
+            status_code=503,
+            detail="The legal analysis service is temporarily unavailable. Please try again."
+        ) from None
 
     # -----------------------------------------------------
     # 5. Get AI response
@@ -474,11 +530,11 @@ def create_message(
     try:
         ai_response = format_case_response(pipeline_result, data.labels)
     except Exception as e:
-        logger.error("Case response formatting failed: type=%s", type(e).__name__)
+        logger.exception("Case response formatting failed")
         raise HTTPException(
             status_code=500,
             detail="The system could not generate a valid response. Please try again.",
-        )
+        ) from e
 
     # -----------------------------------------------------
     # 6. Save AI response

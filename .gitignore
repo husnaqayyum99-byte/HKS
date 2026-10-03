@@ -3,6 +3,7 @@
 .env.*
 **/.env
 **/.env.*
+!bknd/.env.example
 
 # Python
 __pycache__/

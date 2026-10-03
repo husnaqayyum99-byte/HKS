@@ -112,17 +112,6 @@ async function deleteJson(path, accessToken) {
   return payload;
 }
 
-export async function getFollowUpQuestions({ problem, province, language }) {
-  await assertApiRoute("/api/follow-up-questions", "post");
-  const payload = await postJson("/api/follow-up-questions", { problem, province, language }, null);
-  return payload.questions;
-}
-
-export async function analyzeProblem({ problem, province, answers, language }) {
-  await assertApiRoute("/api/analyze", "post");
-  return postJson("/api/analyze", { problem, province, answers, language }, null);
-}
-
 export async function createConversation({ title, accessToken }) {
   if (!BASE_URL) throw new Error("chat_not_connected");
   return (await postJson("/api/conversations", { title }, accessToken)).data;
@@ -173,4 +162,22 @@ export async function sendChatMessage({ conversationId, messages, language = "en
     conversationId: targetConversationId,
     message: { role: "assistant", content: payload.assistant_message?.content || "" },
   };
+}
+
+export async function analyzePublicCase({ content, language = "en", conversationHistory = [] }) {
+  if (!BASE_URL) throw new Error("api.notConfigured");
+  await assertApiRoute("/api/public-analysis", "post");
+
+  const response = await fetch(`${BASE_URL}/api/public-analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      content,
+      language,
+      conversation_history: conversationHistory,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw apiError(payload, response.status);
+  return payload;
 }

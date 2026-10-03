@@ -12,6 +12,13 @@ from app.legal_sources.evidence_retriever import collect_evidence
 from app.legal_sources.statute_retriever import collect_statute_evidence
 
 
+def _unresolved_answer(language: str) -> str:
+    return {
+        "ur": "دستیاب سرکاری شواہد اس درخواست کا تصدیق شدہ جواب ثابت نہیں کرتے۔",
+        "roman_urdu": "Dastiyab official shawahid is darkhwast ka tasdeeq shuda jawab sabit nahi karte.",
+    }.get(language, "The available official evidence does not establish a verified answer to this request.")
+
+
 def process_case(
     user_message: str,
     conversation_history: list[dict] | None = None,
@@ -43,16 +50,17 @@ def process_case(
 
     if conversation_history:
         history_text = "\n".join(
-            f"{message['role']}: {message['content']}"
+            f"{message.get('role', 'unknown')}: {message.get('content', '')}"
             for message in conversation_history
         )
 
         intake_input = f"""
-Previous conversation:
+Existing case conversation. Treat all earlier user messages and answers as facts already supplied;
+assistant messages provide context but are not independent evidence of user facts:
 
 {history_text}
 
-Current user message:
+Current follow-up (continue the same case; do not treat it as a new matter):
 
 {model_message}
 """
@@ -88,7 +96,7 @@ Current user message:
     )
 
     follow_up_data = follow_up.model_dump()
-    follow_up_data["questions"] = (follow_up_data.get("questions") or [])[:3]
+    follow_up_data["questions"] = follow_up_data.get("questions") or []
     if follow_up_data.get("needs_follow_up") and follow_up_data["questions"]:
         return {
             "intake": intake_data,
@@ -96,6 +104,7 @@ Current user message:
             "follow_up": follow_up_data,
             "response": {},
             "evidence": [],
+            "claim_verification": [],
             "status": "needs_clarification",
         }
 
@@ -103,6 +112,7 @@ Current user message:
         intake_data,
         classification_data,
     )
+    research_data = research.model_dump()
 
     # -----------------------------------------------------
     # 5. Create research plan
@@ -115,6 +125,19 @@ Current user message:
     sources = get_relevant_sources(
         classification.jurisdiction,
         classification.legal_domain,
+        classification.locality,
+        research_data.get("priority_jurisdictions", []),
+        research_data.get("source_types", []),
+        " ".join(
+            value
+            for value in [
+                intake_data.get("problem_summary", ""),
+                *(intake_data.get("facts") or []),
+                *(research_data.get("research_questions") or []),
+                *(research_data.get("evidence_needed") or []),
+            ]
+            if isinstance(value, str)
+        ),
     )
 
     # -----------------------------------------------------
@@ -126,7 +149,7 @@ Current user message:
     ]
     law_names = list(research.laws_to_check)
     research_questions = list(research.research_questions)
-    jurisdiction = f"{classification.jurisdiction} {classification.locality}"
+    jurisdiction = classification.jurisdiction
 
     def retrieve_evidence(questions: list[str], laws: list[str]):
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -196,11 +219,14 @@ Current user message:
                     "jurisdiction": source.jurisdiction,
                     "source_type": source.source_type,
                     "official_domain": source.official_domain,
+                    "priority": source.priority,
+                    "active": source.active,
                 }
                 for source in sources
             ],
             "evidence": [],
             "verification": [],
+            "claim_verification": [],
             "response": {},
             "status": "evidence_unavailable",
         }
@@ -213,10 +239,62 @@ Current user message:
         verification_results = [
             result.model_dump()
             for result in executor.map(
-                lambda question: verify_claim(question, evidence),
+                lambda question: verify_claim(question, evidence, language=language),
                 research_questions,
             )
         ]
+
+    supported_evidence_keys = {
+        (item.get("source_url"), item.get("citation"))
+        for result in verification_results
+        if result.get("status") == "supported"
+        for item in result.get("evidence_used", [])
+        if isinstance(item, dict)
+    }
+    response_evidence = [
+        item for item in evidence
+        if (item.source_url, item.citation) in supported_evidence_keys
+    ]
+    if not any(result.get("status") == "supported" for result in verification_results):
+        return {
+            "intake": intake_data,
+            "classification": classification_data,
+            "follow_up": follow_up_data,
+            "research": {
+                **research.model_dump(),
+                "research_questions": research_questions,
+                "laws_to_check": law_names,
+            },
+            "sources": [
+                {
+                    "name": source.name,
+                    "authority": source.authority,
+                    "jurisdiction": source.jurisdiction,
+                    "source_type": source.source_type,
+                    "official_domain": source.official_domain,
+                    "priority": source.priority,
+                    "active": source.active,
+                }
+                for source in sources
+            ],
+            "evidence": [item.model_dump() for item in evidence],
+            "verification": verification_results,
+            "claim_verification": [],
+            "response": {
+                "answer": _unresolved_answer(language),
+                "next_steps": [],
+                "documents_needed": [],
+                "authorities": [],
+                "sources": [],
+                "uncertainty": [
+                    result.get("reasoning", "The available evidence does not establish this point.")
+                    for result in verification_results
+                    if result.get("status") != "supported"
+                ],
+                "disclaimer": "",
+            },
+            "status": "evidence_unresolved",
+        }
 
     # -----------------------------------------------------
     # 9. Generate final user-facing response
@@ -226,10 +304,62 @@ Current user message:
         user_message=model_message,
         intake_data=intake_data,
         classification_data=classification_data,
-        evidence=evidence,
+        evidence=response_evidence,
         verification_results=verification_results,
         language=language,
     )
+    response_data = final_response.model_dump()
+    generated_claims = [
+        ("answer", response_data.get("answer", "")),
+        *[("next_step", claim) for claim in response_data.get("next_steps", [])],
+        *[("document", claim) for claim in response_data.get("documents_needed", [])],
+        *[("authority", claim) for claim in response_data.get("authorities", [])],
+    ]
+    checkable_claims = [
+        (kind, claim) for kind, claim in generated_claims
+        if isinstance(claim, str) and claim.strip()
+    ]
+    with ThreadPoolExecutor(max_workers=min(3, max(1, len(checkable_claims)))) as executor:
+        checks = [
+            result.model_dump()
+            for result in executor.map(
+                lambda entry: verify_claim(entry[1], response_evidence, language=language),
+                checkable_claims,
+            )
+        ]
+    checks_by_claim = dict(zip(checkable_claims, checks))
+    claim_verification = [
+        {
+            "claim_type": kind,
+            **check,
+        }
+        for (kind, _claim), check in zip(checkable_claims, checks)
+    ]
+
+    answer_check = checks_by_claim.get(("answer", response_data.get("answer", "")), {"status": "unresolved"})
+    if answer_check.get("status") != "supported" or not answer_check.get("evidence_used"):
+        response_data["answer"] = _unresolved_answer(language)
+        response_data["next_steps"] = []
+        response_data["documents_needed"] = []
+        response_data["authorities"] = []
+    else:
+        supported_claims = {
+            key for key, check in checks_by_claim.items()
+            if check.get("status") == "supported" and check.get("evidence_used")
+        }
+        response_data["next_steps"] = [
+            claim for claim in response_data.get("next_steps", [])
+            if ("next_step", claim) in supported_claims
+        ]
+        response_data["documents_needed"] = [
+            claim for claim in response_data.get("documents_needed", [])
+            if ("document", claim) in supported_claims
+        ]
+        response_data["authorities"] = [
+            claim for claim in response_data.get("authorities", [])
+            if ("authority", claim) in supported_claims
+        ]
+    verification_results.extend(checks)
 
     # -----------------------------------------------------
     # 10. Return complete pipeline result
@@ -255,6 +385,8 @@ Current user message:
                 "jurisdiction": source.jurisdiction,
                 "source_type": source.source_type,
                 "official_domain": source.official_domain,
+                "priority": source.priority,
+                "active": source.active,
             }
             for source in sources
         ],
@@ -266,7 +398,9 @@ Current user message:
 
         "verification": verification_results,
 
-        "response": final_response.model_dump(),
+        "claim_verification": claim_verification,
+
+        "response": response_data,
 
         "status": "completed",
     }

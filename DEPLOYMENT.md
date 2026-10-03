@@ -14,6 +14,7 @@ Backend variables:
 - `DATABASE_URL`: `sqlite:///./app.db` locally; use a PostgreSQL SQLAlchemy URL in production, preferably `postgresql+psycopg://...` with the provider's required TLS options.
 - `SUPABASE_URL` and `SUPABASE_KEY`: Supabase project URL and publishable/anon key. Do not use a service-role key for browser-visible code.
 - `GROQ_API_KEY` and optional `GROQ_MODEL`: AI provider credentials and model.
+- If a Groq key has ever been exposed in source, logs, screenshots, or shared materials, revoke it and create a replacement. Keep the replacement only in the backend environment; never place it in Vite variables or commit it.
 - `FRONTEND_URL`: frontend origin, without a trailing slash; used for signup confirmation and password recovery redirects.
 - `CORS_ORIGINS`: comma-separated exact frontend origins. Use local origins in development and only the deployed frontend origin(s) in production. Do not use `*`.
 
@@ -55,6 +56,12 @@ npm.cmd run dev
 ```
 
 Frontend: `http://127.0.0.1:5173`. Backend health: `http://127.0.0.1:8000/api/health`.
+
+## Public legal analysis
+
+The public legal-path page submits `POST /api/public-analysis`. It accepts a problem description, the selected language (`en`, `ur`, or `roman_urdu`), and up to ten recent user/assistant turns for a follow-up. Requests are bounded to 8,000 characters per message and are not saved to a user account. The endpoint uses the same intake, classification, research, retrieval, verification, and response pipeline as authenticated conversations; it does not return a fallback/demo answer when Groq or official evidence is unavailable.
+
+The response includes the problem understanding, legal area, jurisdiction, supported steps/documents/authorities, unresolved claims, and official evidence linked to claims. The anonymous endpoint incurs provider usage, so production deployments should place suitable abuse/rate controls at the API gateway or hosting layer.
 
 ## Production Build and Startup
 

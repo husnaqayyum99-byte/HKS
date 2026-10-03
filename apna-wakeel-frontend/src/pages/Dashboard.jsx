@@ -40,6 +40,12 @@ function isOfficialLawUrl(value) {
       "www.pakistancode.gov.pk",
       "kpcode.kp.gov.pk",
       "www.kpcode.kp.gov.pk",
+      "revenue.kp.gov.pk",
+      "labour.kp.gov.pk",
+      "kppolice.gov.pk",
+      "www.kppolice.gov.pk",
+      "nadra.gov.pk",
+      "www.nadra.gov.pk",
     ].includes(url.hostname.toLowerCase());
   } catch {
     return false;
@@ -573,6 +579,11 @@ export default function Dashboard({ pathname, navigate, user, accessToken, onLog
           legalDisclaimer: t("chat.legalDisclaimer"),
           underReview: t("chat.underReview"),
           underReviewNotice: t("chat.underReviewNotice"),
+          sourceExcerpt: t("source.excerpt"),
+          researchQuestion: t("source.claim"),
+          supported: t("verification.supported"),
+          contradicted: t("verification.contradicted"),
+          unresolved: t("verification.unresolved"),
           needDescription: t("chat.needDescription"),
           responseUnavailable: t("chat.responseUnavailable"),
         },

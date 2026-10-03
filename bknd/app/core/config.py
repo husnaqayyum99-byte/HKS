@@ -31,9 +31,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=[
-            Path(".env"),
-            BASE_DIR / ".env",
             ROOT_DIR / ".env",
+            BASE_DIR / ".env",
         ],
         extra="ignore",
     )

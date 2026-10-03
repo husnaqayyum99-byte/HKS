@@ -1,8 +1,7 @@
 // -----------------------------------------------------------------------------
 // SPEECH-TO-TEXT SERVICE
-// This is the ONLY file that talks to a speech recognizer. It gives VoiceInput
-// (the microphone UI) one small interface, so the actual engine underneath can
-// be swapped later without touching any component:
+// This is the only file that talks to a speech recognizer. It gives the
+// authenticated voice workspace one small interface:
 //
 //   const recognizer = createSpeechRecognizer("ur");
 //   recognizer.supported                -> true/false, check before showing the mic
@@ -33,15 +32,6 @@ export function normalizeSpeechLanguage(languageCode) {
 function getBrowserEngine() {
   if (typeof window === "undefined") return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
-}
-
-// Some browsers advertise the API but only truly support English; Urdu
-// recognition quality varies by device. We still expose it — the person can
-// always fall back to typing or edit the result — but Describe.jsx uses this
-// to decide whether to offer the Urdu option in the language picker.
-export function isUrduSpeechLikelySupported() {
-  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent || "";
-  return /Chrome|Edg/.test(ua); // Chrome and Edge carry the widest language list
 }
 
 function browserRecognizer(langCode) {

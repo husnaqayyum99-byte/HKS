@@ -66,7 +66,10 @@ Possible urgency values:
 
 Rules:
 - {language_instruction}
-- Only use information provided by the user.
+- Treat earlier user messages and the current message as the case record; preserve material facts when the current message is only a follow-up.
+- Earlier assistant messages are context for what has already been asked or discussed, not independent evidence of user facts. Use those facts only if the user stated or confirmed them.
+- Attribute information extracted from a user-selected document to that document; do not silently treat it as independently verified.
+- Only use information provided by the user or explicitly attributed to a user-selected document.
 - Do not guess missing facts.
 - If the location is not provided, use "unknown".
 - If the category is unclear, use "unclear".

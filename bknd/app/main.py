@@ -8,8 +8,8 @@ from sqlalchemy import text
 
 from app.api.auth import router as auth_router
 from app.api.conversations import router as conversations_router
-from app.api.legal import router as legal_router
 from app.api.documents import router as documents_router
+from app.api.legal import router as legal_router
 from app.database.connection import engine, initialize_local_schema
 from app.core.config import settings
 
@@ -41,8 +41,8 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(conversations_router)
-app.include_router(legal_router)
 app.include_router(documents_router)
+app.include_router(legal_router)
 
 
 @app.get("/")

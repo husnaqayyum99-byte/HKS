@@ -14,6 +14,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
 from app.legal_sources.evidence import EvidenceItem
+from app.legal_sources.source_registry import jurisdiction_scope
 
 
 FEDERAL_LAWS_URL = "https://pakistancode.gov.pk/english/sHyuRiF.php"
@@ -171,7 +172,8 @@ def find_law_records(
     law_names: list[str],
     jurisdiction: str,
 ) -> list[LawRecord]:
-    if not law_names:
+    jurisdiction = jurisdiction_scope(jurisdiction)
+    if not law_names or jurisdiction not in {"federal", "khyber pakhtunkhwa"}:
         return []
 
     selected: dict[str, LawRecord] = {}
@@ -185,8 +187,7 @@ def find_law_records(
             if _record_matches(record, law_name):
                 selected[record.detail_url] = record
 
-    jurisdiction_text = jurisdiction.strip().lower()
-    if any(term in jurisdiction_text for term in ("khyber pakhtunkhwa", "chitral", "\bkp\b")):
+    if jurisdiction == "khyber pakhtunkhwa":
         kp_search_titles = list(dict.fromkeys(
             _kp_search_title(name) for name in law_names[:MAX_LAWS_PER_CASE]
         ))
@@ -204,7 +205,13 @@ def find_law_records(
                     if any(_record_matches(record, name) for name in law_names[:MAX_LAWS_PER_CASE]):
                         selected[record.detail_url] = record
 
-    return list(selected.values())[:MAX_LAWS_PER_CASE]
+    return sorted(
+        selected.values(),
+        key=lambda record: 0
+        if jurisdiction == "khyber pakhtunkhwa"
+        and record.jurisdiction == "Khyber Pakhtunkhwa"
+        else 1,
+    )[:MAX_LAWS_PER_CASE]
 
 
 def _ranked_statute_sections(text: str, research_questions: list[str]):
