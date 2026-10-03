@@ -119,6 +119,8 @@ def _build_public_result(pipeline_result: dict) -> dict:
             "excerpt": item.get("relevant_text", ""),
             "official_status": item.get("official_status"),
             "retrieved_at": item.get("retrieved_at"),
+            "retrieval_status": "retrieved",
+            "freshness_status": "not_assessed",
             "verification_status": (
                 related_claims[0]["status"] if related_claims
                 else "unresolved"
@@ -163,8 +165,14 @@ def _build_public_result(pipeline_result: dict) -> dict:
         "status": status,
         "understanding": intake.get("problem_summary", ""),
         "facts": intake.get("facts", []),
+        "incident_location": intake.get("incident_location"),
+        "incident_type": intake.get("incident_type"),
+        "vehicle_damage": intake.get("vehicle_damage"),
+        "responsibility_dispute": intake.get("responsibility_dispute"),
+        "compensation_dispute": intake.get("compensation_dispute"),
         "missing_information": intake.get("missing_information", []),
         "legal_area": classification.get("legal_domain", "unclear"),
+        "legal_subtype": classification.get("legal_subtype", "unclear"),
         "jurisdiction": classification.get("jurisdiction", "Unknown"),
         "locality": classification.get("locality", "unknown"),
         "follow_up_questions": follow_up.get("questions", []),

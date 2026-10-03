@@ -14,6 +14,7 @@ def _evidence():
         "source_type": "legislation",
         "relevant_text": "Retrieved official legislation excerpt.",
         "citation": "Relevant statutory provision",
+        "retrieved_at": "2026-10-03T12:00:00+00:00",
     }
 
 
@@ -29,9 +30,18 @@ def test_public_analysis_uses_shared_pipeline_and_maps_claims_to_evidence(monkey
         })
         return {
             "status": "completed",
-            "intake": {"problem_summary": "A tenant reports a lockout.", "facts": ["rented house"]},
+            "intake": {
+                "problem_summary": "A tenant reports a lockout.",
+                "facts": ["rented house"],
+                "incident_location": "Chitral",
+                "incident_type": "road accident",
+                "vehicle_damage": "door damage",
+                "responsibility_dispute": True,
+                "compensation_dispute": False,
+            },
             "classification": {
                 "legal_domain": "tenancy",
+                "legal_subtype": "vehicle_damage",
                 "jurisdiction": "Pakistan",
                 "locality": "unknown",
             },
@@ -91,6 +101,12 @@ def test_public_analysis_uses_shared_pipeline_and_maps_claims_to_evidence(monkey
         "language": "roman_urdu",
     }
     assert result["legal_area"] == "tenancy"
+    assert result["legal_subtype"] == "vehicle_damage"
+    assert result["incident_location"] == "Chitral"
+    assert result["incident_type"] == "road accident"
+    assert result["vehicle_damage"] == "door damage"
+    assert result["responsibility_dispute"] is True
+    assert result["compensation_dispute"] is False
     assert result["jurisdiction"] == "Pakistan"
     assert result["status"] == "verified"
     assert result["follow_up_questions"] == ["Which documents do you have?"]
@@ -101,6 +117,8 @@ def test_public_analysis_uses_shared_pipeline_and_maps_claims_to_evidence(monkey
     assert result["sources"][0]["authority"] == "Ministry of Law and Justice, Government of Pakistan"
     assert result["sources"][0]["active"] is True
     assert result["sources"][0]["priority"] == 100
+    assert result["evidence"][0]["retrieved_at"] == "2026-10-03T12:00:00+00:00"
+    assert result["evidence"][0]["freshness_status"] == "not_assessed"
     assert "reasoning" not in result["claims"][0]
 
 

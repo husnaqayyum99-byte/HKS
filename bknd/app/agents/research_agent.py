@@ -58,6 +58,11 @@ Decompose the actual matter into distinct, answerable questions when material,
 including the applicable law/rule, competent authority, procedure, required
 documents, deadlines or conditions, and jurisdiction. Include only aspects
 relevant to this case and do not collapse these into one generic search.
+Use legal_subtype, incident facts, and the user's actual context to distinguish
+closely related topics. In particular, distinguish workplace from domestic or
+online harassment; online/electronic fraud from offline fraud; road accidents
+from traffic services or violations; and a reporting request from a conclusion
+that an offence occurred. Never calculate inheritance shares.
 Use every known fact from the intake and classification to target each question.
 Do not ask the user for facts here; express what remains unknown as research needs.
 Treat the classified jurisdiction as the factual baseline. Do not replace it
@@ -89,6 +94,20 @@ information required before a reliable answer can be produced.
 Laws_to_check should contain only plausible statute or constitutional
 document names to search in official government catalogs. Do not cite
 sections or claim that a law applies; retrieval and verification happen later.
+
+When relevant, consider these exact catalog search titles, without assuming
+they apply: NADRA Ordinance, 2000; Khyber Pakhtunkhwa Births, Deaths,
+Marriages and Divorce/Dissolution Registration Rules, 2021; Khyber
+Pakhtunkhwa Prohibition of Employment of Children Act, 2015; Khyber
+Pakhtunkhwa Child Protection and Welfare Act, 2010; Protection Against
+Harassment of Women at the Workplace Act, 2010; Khyber Pakhtunkhwa Domestic
+Violence Against Women (Prevention and Protection) Act, 2021; Prevention of
+Electronic Crimes Act, 2016; Khyber Pakhtunkhwa Letters of Administration
+and Succession Certificates Act, 2021; Khyber Pakhtunkhwa Enforcement of
+Women's Property Rights Act, 2012; and Provincial Motor Vehicles Ordinance,
+1965. Search only the jurisdictionally relevant official catalog and only
+when the facts make the title pertinent. Government service procedures may
+need a department source rather than a statute.
 
 IMPORTANT:
 

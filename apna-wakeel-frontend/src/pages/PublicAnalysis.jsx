@@ -88,6 +88,7 @@ export default function PublicAnalysis({ onHome }) {
 
       <Alert tone="info" icon="info">
         <p>{t("publicAnalysis.privacyNote")}</p>
+        <p>{t("publicAnalysis.scopeNote")}</p>
       </Alert>
 
       {history.length > 0 && (
@@ -172,8 +173,20 @@ export default function PublicAnalysis({ onHome }) {
             {result.facts?.length > 0 && <ul>{result.facts.map((fact, index) => <li key={`${index}-${fact}`}>{fact}</li>)}</ul>}
           </section>
           <dl className="public-path-facts">
-            <div><dt>{t("publicAnalysis.legalArea")}</dt><dd>{result.legal_area || t("publicAnalysis.notEstablished")}</dd></div>
+            <div><dt>{t("publicAnalysis.legalArea")}</dt><dd>{result.legal_area?.replaceAll("_", " ") || t("publicAnalysis.notEstablished")}</dd></div>
+            {result.legal_subtype && result.legal_subtype !== "unclear" && (
+              <div><dt>{t("publicAnalysis.subtype")}</dt><dd>{result.legal_subtype.replaceAll("_", " ")}</dd></div>
+            )}
             <div><dt>{t("publicAnalysis.jurisdiction")}</dt><dd>{[result.jurisdiction, result.locality].filter((item) => item && item !== "unknown").join(" · ") || t("publicAnalysis.notEstablished")}</dd></div>
+            {result.incident_location && <div><dt>{t("publicAnalysis.incidentLocation")}</dt><dd>{result.incident_location}</dd></div>}
+            {result.incident_type && <div><dt>{t("publicAnalysis.incidentType")}</dt><dd>{result.incident_type}</dd></div>}
+            {result.vehicle_damage && <div><dt>{t("publicAnalysis.vehicleDamage")}</dt><dd>{result.vehicle_damage}</dd></div>}
+            {result.responsibility_dispute !== null && result.responsibility_dispute !== undefined && (
+              <div><dt>{t("publicAnalysis.responsibilityDispute")}</dt><dd>{t(result.responsibility_dispute ? "publicAnalysis.yes" : "publicAnalysis.no")}</dd></div>
+            )}
+            {result.compensation_dispute !== null && result.compensation_dispute !== undefined && (
+              <div><dt>{t("publicAnalysis.compensationDispute")}</dt><dd>{t(result.compensation_dispute ? "publicAnalysis.yes" : "publicAnalysis.no")}</dd></div>
+            )}
           </dl>
 
           {completed && result.answer && (
@@ -207,6 +220,9 @@ export default function PublicAnalysis({ onHome }) {
 
           <section className="public-path-section">
             <h3>{t("publicAnalysis.sources")}</h3>
+            {result.evidence?.length > 0 && (
+              <p className="public-analysis-hint">{t("publicAnalysis.freshnessNote")}</p>
+            )}
             {result.evidence?.length > 0 ? (
               <ul className="public-evidence-list">
                 {result.evidence.map((item, index) => (
@@ -218,9 +234,15 @@ export default function PublicAnalysis({ onHome }) {
                       <span className={`public-claim-status status-${item.verification_status}`}>
                         {statusLabels[item.verification_status] || statusLabels.unresolved}
                       </span>
+                      {item.official_status && (
+                        <span className="public-claim-status status-unresolved">{item.official_status}</span>
+                      )}
                     </div>
                     <p>{item.authority}{item.jurisdiction ? ` · ${item.jurisdiction}` : ""}</p>
                     {item.citation && <p>{item.citation}</p>}
+                    {item.retrieved_at && (
+                      <p>{t("publicAnalysis.retrievedAt")}: {new Date(item.retrieved_at).toLocaleString(language === "ur" ? "ur-PK" : "en-PK")}</p>
+                    )}
                     <blockquote>{item.excerpt}</blockquote>
                     {item.claims?.length > 0 && (
                       <ul>{item.claims.map((claim, claimIndex) => (

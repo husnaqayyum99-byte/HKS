@@ -12,6 +12,11 @@ class IntakeResult(BaseModel):
     facts: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
     urgency: str = "unclear"
+    incident_location: str | None = None
+    incident_type: str | None = None
+    vehicle_damage: str | None = None
+    responsibility_dispute: bool | None = None
+    compensation_dispute: bool | None = None
 
 
 def intake_case(user_message: str, language: str = "en") -> IntakeResult:
@@ -43,18 +48,25 @@ Identify:
 4. facts
 5. missing_information
 6. urgency
+7. incident_location, incident_type, vehicle_damage,
+   responsibility_dispute, compensation_dispute when relevant
 
 Possible categories:
-- traffic_accident
-- property
-- family
-- employment
-- criminal
-- civil
-- harassment
-- fraud
 - identity_documents
 - government_services
+- family_marriage
+- child_protection
+- harassment_protection
+- fraud_cybercrime
+- land_revenue
+- inheritance_succession
+- traffic_accident
+- traffic_services
+- police_reporting
+- property
+- employment
+- tenancy
+- civil
 - other
 - unclear
 
@@ -74,6 +86,9 @@ Rules:
 - If the location is not provided, use "unknown".
 - If the category is unclear, use "unclear".
 - If something important is missing, add it to missing_information.
+- For a road incident, preserve only explicitly stated facts in the
+    dedicated incident fields. Use null if unknown or not applicable; never
+    infer fault, injury, damage, or a compensation claim.
 - Return ONLY valid JSON.
 
 Required JSON structure:
@@ -84,7 +99,12 @@ Required JSON structure:
     "location": "string",
     "facts": [],
     "missing_information": [],
-    "urgency": "string"
+    "urgency": "string",
+    "incident_location": null,
+    "incident_type": null,
+    "vehicle_damage": null,
+    "responsibility_dispute": null,
+    "compensation_dispute": null
 }}
 
 User's message:

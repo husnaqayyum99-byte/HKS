@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
@@ -327,6 +328,8 @@ def collect_evidence(
                     jurisdiction=source.jurisdiction,
                     source_type=source.source_type,
                     relevant_text=relevant_text,
+                    retrieval_method="official_html_page",
+                    retrieved_at=datetime.now(timezone.utc).isoformat(),
                 )
             )
 

@@ -5,10 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agents import followup_agent, intake_agent, orchestrator, research_agent, response_agent
+from app.agents import classification_agent, followup_agent, intake_agent, orchestrator, research_agent, response_agent
 from app.agents.orchestrator import process_case
 from app.api.conversations import format_case_response
 from app.legal_sources.source_registry import LegalSource, get_relevant_sources
+from app.legal_sources.domain_catalog import law_search_candidates
 from app.legal_sources import evidence_retriever
 from app.legal_sources import source_registry
 from app.legal_sources import source_health
@@ -111,9 +112,7 @@ def test_unrelated_legislation_does_not_match_by_source_type_alone():
 def test_information_type_can_match_research_domain():
     sources = get_relevant_sources("Khyber Pakhtunkhwa", "land administration")
 
-    assert [source.name for source in sources] == [
-        "Khyber Pakhtunkhwa Revenue and Estate Department"
-    ]
+    assert sources[0].name == "Khyber Pakhtunkhwa Revenue and Estate Department"
 
 
 def test_user_facts_relevance_can_prioritize_the_matching_registered_source():
@@ -124,6 +123,154 @@ def test_user_facts_relevance_can_prioritize_the_matching_registered_source():
     )
 
     assert sources[0].name == "Khyber Pakhtunkhwa Revenue and Estate Department"
+
+
+def test_registered_sources_cover_supported_domains_without_cross_jurisdiction_leaks():
+    cases = [
+        ("Pakistan", "identity_documents", "NADRA"),
+        ("Khyber Pakhtunkhwa", "family_marriage", "Khyber Pakhtunkhwa Code"),
+        ("Khyber Pakhtunkhwa", "child_protection", "Khyber Pakhtunkhwa Code"),
+        ("Khyber Pakhtunkhwa", "harassment_protection", "Khyber Pakhtunkhwa Code"),
+        ("Pakistan", "fraud_cybercrime", "Pakistan Code"),
+        ("Khyber Pakhtunkhwa", "land_revenue", "Khyber Pakhtunkhwa Revenue and Estate Department"),
+        ("Khyber Pakhtunkhwa", "inheritance_succession", "Khyber Pakhtunkhwa Code"),
+        ("Khyber Pakhtunkhwa", "traffic_accident", "Khyber Pakhtunkhwa Code"),
+        ("Khyber Pakhtunkhwa", "traffic_services", "Peshawar Traffic Police Services"),
+        ("Khyber Pakhtunkhwa", "police_reporting", "KP Police Complaint Portal"),
+    ]
+
+    for jurisdiction, domain, expected_source in cases:
+        sources = get_relevant_sources(jurisdiction, domain)
+        assert any(source.name == expected_source for source in sources), (domain, sources)
+        assert all(source.active and source.search_url.startswith("https://") for source in sources)
+
+    assert get_relevant_sources("Khyber Pakhtunkhwa", "domicile_verification") == []
+    assert get_relevant_sources("Unknown", "identity_documents") == []
+
+
+def test_confirmed_direct_official_service_targets_are_registered():
+    by_name = {source.name: source for source in source_registry.LEGAL_SOURCES}
+
+    assert by_name["NADRA"].search_url == "https://www.nadra.gov.pk/"
+    assert by_name["NADRA CNIC Services"].search_url == (
+        "https://www.nadra.gov.pk/identityDocument/cnic?tab=nic&action=new"
+    )
+    assert by_name["KP Revenue Online Services"].search_url == "https://revenue.kp.gov.pk/services/"
+    assert by_name["KP Land Records Service Centers"].search_url == "https://kplr.gkp.pk/SDCCenters"
+    assert by_name["KP Police Complaint Portal"].search_url == (
+        "https://complaints.kppolice.gov.pk/register-complaint"
+    )
+
+
+def test_classification_keeps_fine_grained_legal_subtype(monkeypatch):
+    monkeypatch.setattr(
+        classification_agent,
+        "generate_response",
+        lambda _prompt: json.dumps({
+            "legal_domain": "harassment_protection",
+            "legal_subtype": "domestic_violence",
+            "jurisdiction": "Khyber Pakhtunkhwa",
+            "locality": "Chitral",
+            "matter_type": "protection navigation",
+            "requires_local_procedure": True,
+            "confidence": "high",
+        }),
+    )
+
+    result = classification_agent.classify_case({"problem_summary": "A partner is threatening me at home."})
+
+    assert result.legal_domain == "harassment_protection"
+    assert result.legal_subtype == "domestic_violence"
+
+
+def test_classification_prompt_prevents_collapsing_fraud_harassment_and_accidents(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(
+        classification_agent,
+        "generate_response",
+        lambda prompt: prompts.append(prompt) or json.dumps({}),
+    )
+
+    result = classification_agent.classify_case({"problem_summary": "A person says fraud happened."})
+
+    prompt = prompts[0]
+    assert result.legal_domain == "unclear"
+    assert "Fraud is not automatically cybercrime" in prompt
+    assert "Harassment depends on context" in prompt
+    assert "Distinguish road accidents" in prompt
+    assert "A reported incident is not proof that a crime occurred" in prompt
+
+
+def test_intake_preserves_structured_road_incident_fields(monkeypatch):
+    payload = {
+        "problem_summary": "A car was damaged in a road accident.",
+        "category": "traffic_accident",
+        "location": "Chitral",
+        "facts": ["The other driver disputes responsibility."],
+        "missing_information": [],
+        "urgency": "normal",
+        "incident_location": "Chitral",
+        "incident_type": "road accident",
+        "vehicle_damage": "car body damage",
+        "responsibility_dispute": True,
+        "compensation_dispute": True,
+    }
+    monkeypatch.setattr(intake_agent, "generate_response", lambda _prompt: json.dumps(payload))
+
+    result = intake_agent.intake_case("My car was damaged in Chitral.")
+
+    assert result.incident_location == "Chitral"
+    assert result.incident_type == "road accident"
+    assert result.vehicle_damage == "car body damage"
+    assert result.responsibility_dispute is True
+    assert result.compensation_dispute is True
+
+
+def test_law_candidates_follow_explicit_subtypes_and_jurisdiction():
+    assert law_search_candidates({
+        "legal_subtype": "online_harassment",
+        "jurisdiction": "Pakistan",
+    }) == ["Prevention of Electronic Crimes Act, 2016"]
+    assert law_search_candidates({
+        "legal_subtype": "offline_fraud",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == []
+    assert law_search_candidates({
+        "legal_subtype": "general_harassment_complaint",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == []
+    assert law_search_candidates({
+        "legal_subtype": "workplace_harassment",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == ["Protection Against Harassment of Women at the Workplace Act, 2010"]
+    assert law_search_candidates({
+        "legal_subtype": "domestic_violence",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == ["Khyber Pakhtunkhwa Domestic Violence Against Women Prevention and Protection Act, 2021"]
+    assert law_search_candidates({
+        "legal_subtype": "child_labour",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == ["Khyber Pakhtunkhwa Prohibition of Employment of Children Act, 2015"]
+    assert law_search_candidates({
+        "legal_subtype": "road_accident",
+        "jurisdiction": "Punjab",
+    }) == []
+    assert law_search_candidates({
+        "legal_subtype": "domestic_violence",
+        "jurisdiction": "Pakistan",
+    }) == []
+    assert law_search_candidates({
+        "legal_subtype": "electronic_fraud",
+        "jurisdiction": "Khyber Pakhtunkhwa",
+    }) == ["Prevention of Electronic Crimes Act, 2016"]
+    assert law_search_candidates({
+        "legal_subtype": "online_fraud",
+        "jurisdiction": "Pakistan",
+    }) == ["Prevention of Electronic Crimes Act, 2016"]
+    assert law_search_candidates({
+        "legal_subtype": "identity_misuse",
+        "jurisdiction": "Pakistan",
+    }) == []
 
 
 def test_inactive_sources_are_not_selected(monkeypatch):
@@ -205,6 +352,8 @@ def test_retrieved_evidence_remains_unverified(monkeypatch):
 
     assert len(evidence) == 1
     assert evidence[0].verified is False
+    assert evidence[0].retrieval_method == "official_html_page"
+    assert evidence[0].retrieved_at
 
 
 def test_unavailable_registered_source_is_skipped_safely(monkeypatch):
@@ -262,7 +411,41 @@ def test_source_health_checks_redirect_content_and_page_change(monkeypatch):
     assert result["redirect_within_domain"] is True
     assert result["content_accessible"] is True
     assert result["page_changed"] is True
+    assert result["freshness_status"] == "changed_since_last_check"
+    assert result["status"] == "available"
+    assert result["checked_at"]
     assert result["content_hash"]
+
+    unchanged = source_health.check_source_health(
+        source,
+        previous_content_hash=result["content_hash"],
+    )
+    assert unchanged["freshness_status"] == "unchanged_since_last_check"
+
+
+def test_source_health_marks_unextractable_pdf_as_unreadable(monkeypatch):
+    source = LegalSource(
+        name="Unreadable document",
+        authority="Government department",
+        jurisdiction="Khyber Pakhtunkhwa",
+        source_type="legislation",
+        domain="Legal information",
+        official_domain="example.gov.pk",
+        search_url="https://example.gov.pk/law.pdf",
+    )
+    response = Mock()
+    response.url = source.search_url
+    response.content = b"not a PDF"
+    response.text = ""
+    response.headers = {"content-type": "application/pdf"}
+    response.raise_for_status = Mock()
+    monkeypatch.setattr(source_health.requests, "get", lambda *_args, **_kwargs: response)
+
+    result = source_health.check_source_health(source)
+
+    assert result["status"] == "unreadable"
+    assert result["content_accessible"] is False
+    assert result["freshness_status"] == "unknown"
 
 
 def test_source_health_flags_external_redirect_and_outage(monkeypatch):

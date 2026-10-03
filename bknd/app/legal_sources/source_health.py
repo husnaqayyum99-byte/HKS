@@ -1,8 +1,12 @@
 import hashlib
+from datetime import datetime, timezone
+from io import BytesIO
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError, PdfStreamError
 
 from app.legal_sources.source_registry import LegalSource
 
@@ -20,6 +24,7 @@ def check_source_health(
     timeout: int = 10,
 ) -> dict:
     url = source.search_url or f"https://{source.official_domain}"
+    checked_at = datetime.now(timezone.utc).isoformat()
     try:
         response = requests.get(
             url,
@@ -36,7 +41,11 @@ def check_source_health(
             "content_accessible": False,
             "content_hash": None,
             "page_changed": None,
+            "freshness_status": "unknown",
+            "status": "unavailable",
+            "checked_at": checked_at,
             "final_url": None,
+            "http_status": getattr(getattr(error, "response", None), "status_code", None),
             "error": type(error).__name__,
         }
 
@@ -44,17 +53,31 @@ def check_source_health(
     redirect_within_domain = _belongs_to_registered_domain(final_url, source)
     content_type = response.headers.get("content-type", "").lower()
     content = response.content
-    if "text/html" in content_type:
+    if not redirect_within_domain:
+        accessible = False
+    elif "text/html" in content_type:
         soup = BeautifulSoup(response.text, "html.parser")
         for element in soup(["script", "style", "noscript"]):
             element.decompose()
         accessible = bool(soup.get_text(" ", strip=True))
     elif "application/pdf" in content_type:
-        accessible = bool(content)
+        try:
+            reader = PdfReader(BytesIO(content), strict=False)
+            accessible = any(
+                (page.extract_text() or "").strip()
+                for page in reader.pages[:5]
+            )
+        except (PdfReadError, PdfStreamError, ValueError, OSError):
+            accessible = False
     else:
         accessible = False
 
     content_hash = hashlib.sha256(content).hexdigest() if accessible else None
+    page_changed = (
+        content_hash != previous_content_hash
+        if content_hash and previous_content_hash
+        else None
+    )
     return {
         "source_name": source.name,
         "available": True,
@@ -62,11 +85,19 @@ def check_source_health(
         "redirect_within_domain": redirect_within_domain,
         "content_accessible": accessible,
         "content_hash": content_hash,
-        "page_changed": (
-            content_hash != previous_content_hash
-            if content_hash and previous_content_hash
-            else None
+        "page_changed": page_changed,
+        "freshness_status": (
+            "unknown" if page_changed is None
+            else "changed_since_last_check" if page_changed
+            else "unchanged_since_last_check"
         ),
+        "status": (
+            "unavailable" if not redirect_within_domain
+            else "available" if accessible
+            else "unreadable"
+        ),
+        "checked_at": checked_at,
         "final_url": final_url,
+        "http_status": response.status_code,
         "error": None,
     }

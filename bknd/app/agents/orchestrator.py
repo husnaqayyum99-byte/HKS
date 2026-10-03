@@ -10,6 +10,7 @@ from app.agents.followup_agent import generate_follow_up_questions
 from app.legal_sources.source_registry import get_relevant_sources
 from app.legal_sources.evidence_retriever import collect_evidence
 from app.legal_sources.statute_retriever import collect_statute_evidence
+from app.legal_sources.domain_catalog import law_search_candidates
 
 
 def _unresolved_answer(language: str) -> str:
@@ -147,7 +148,10 @@ Current follow-up (continue the same case; do not treat it as a new matter):
     non_legislation_sources = [
         source for source in sources if source.source_type != "legislation"
     ]
-    law_names = list(research.laws_to_check)
+    law_names = list(dict.fromkeys([
+        *law_search_candidates(classification_data),
+        *research.laws_to_check,
+    ]))
     research_questions = list(research.research_questions)
     jurisdiction = classification.jurisdiction
 

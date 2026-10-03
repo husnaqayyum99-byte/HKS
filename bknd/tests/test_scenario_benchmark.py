@@ -1,13 +1,26 @@
 from app.evaluation.legal_scenarios import evaluate_benchmark, evaluate_scenario, load_scenarios
 
 
-def test_benchmark_contains_twenty_structured_scenarios_across_initial_scope():
+def test_benchmark_contains_structured_scenarios_across_supported_scope():
     benchmark = load_scenarios()
     scenarios = benchmark["scenarios"]
 
-    assert len(scenarios) == 20
+    assert len(scenarios) == 35
     assert {scenario["category"] for scenario in scenarios} == {
         "identity_cnic",
+        "identity_domicile",
+        "family_marriage",
+        "child_labour",
+        "child_protection",
+        "workplace_harassment",
+        "domestic_violence",
+        "online_harassment",
+        "offline_fraud",
+        "online_fraud",
+        "land_boundary",
+        "inheritance_succession",
+        "traffic_accident",
+        "traffic_services",
         "property_inheritance",
         "tenancy",
         "employment",
@@ -73,8 +86,8 @@ def test_benchmark_metrics_report_context_questions_research_and_evidence():
 def test_benchmark_aggregates_only_available_results_and_marks_review_gap():
     report = evaluate_benchmark({})
 
-    assert report["scenario_count"] == 20
+    assert report["scenario_count"] == 35
     assert report["evaluated_count"] == 0
-    assert report["pending_legal_review_count"] == 20
+    assert report["pending_legal_review_count"] == 35
     assert report["metrics"] == {}
     assert all(value is None for value in report["per_scenario"].values())
